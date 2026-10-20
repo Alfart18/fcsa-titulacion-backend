@@ -1,0 +1,20 @@
+services:
+  postgres_fcsa:
+    image: postgres:16-alpine
+    container_name: fcsa_titulacion_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fcsa_user
+      POSTGRES_PASSWORD: fcsa_password_2026
+      POSTGRES_DB: fcsa_titulacion
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata_fcsa:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fcsa_user -d fcsa_titulacion"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+volumes:
+  pgdata_fcsa:

@@ -1,0 +1,62 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RolUsuario {
+  DECANO
+  SECRETARIA_ACADEMICA
+  ADMINISTRATIVO
+}
+
+enum EstadoUsuario {
+  ACTIVO
+  DESACTIVADO
+}
+
+model ConfiguracionInstitucional {
+  id                Int      @id @default(autoincrement())
+  facultad          String   @default("Facultad de Ciencias de la Salud") @db.VarChar(200)
+  universidad       String   @default("Universidad Andina del Cusco") @db.VarChar(200)
+  ciudad            String   @default("Cusco") @db.VarChar(100)
+  siglasFacultad    String   @default("FCSa") @map("siglas_facultad") @db.VarChar(20)
+  siglasUniversidad String   @default("UAC") @map("siglas_universidad") @db.VarChar(20)
+  actualizadoEn     DateTime @updatedAt @map("actualizado_en")
+
+  @@map("configuracion_institucional")
+}
+
+model Usuario {
+  id               String              @id @default(uuid()) @db.Uuid
+  nombresCompletos String              @map("nombres_completos") @db.VarChar(180)
+  gradoTitulo      String              @default("Dr.") @map("grado_titulo") @db.VarChar(50)
+  correo           String              @unique @db.VarChar(150)
+  passwordHash     String              @map("password_hash")
+  iniciales        String              @db.VarChar(10)
+  rol              RolUsuario
+  estado           EstadoUsuario       @default(ACTIVO)
+  esDecanoFirmante Boolean             @default(false) @map("es_decano_firmante")
+  creadoEn         DateTime            @default(now()) @map("creado_en")
+  actualizadoEn    DateTime            @updatedAt @map("actualizado_en")
+  auditorias       RegistroAuditoria[]
+
+  @@map("usuarios")
+}
+
+model RegistroAuditoria {
+  id               BigInt   @id @default(autoincrement())
+  usuarioId        String   @map("usuario_id") @db.Uuid
+  usuario          Usuario  @relation(fields: [usuarioId], references: [id])
+  inicialesUsuario String   @map("iniciales_usuario") @db.VarChar(10)
+  accion           String   @db.VarChar(50)
+  entidad          String   @db.VarChar(60)
+  entidadId        String?  @map("entidad_id") @db.VarChar(80)
+  detalle          Json
+  fechaHora        DateTime @default(now()) @map("fecha_hora")
+
+  @@map("registro_auditoria")
+}
