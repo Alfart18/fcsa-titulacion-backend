@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "sourceRoot": "apps/fcsa-titulacion-backend/src",
+  "compilerOptions": {
+    "deleteOutDir": true,
+    "builder": "rspack",
+    "tsConfigPath": "apps/fcsa-titulacion-backend/tsconfig.app.json"
+  },
+  "projects": {
+    "database": {
+      "type": "library",
+      "root": "libs/database",
+      "entryFile": "index",
+      "sourceRoot": "libs/database/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/database/tsconfig.lib.json"
+      }
+    },
+    "fcsa-titulacion-backend": {
+      "type": "application",
+      "root": "apps/fcsa-titulacion-backend",
+      "entryFile": "main",
+      "sourceRoot": "apps/fcsa-titulacion-backend/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/fcsa-titulacion-backend/tsconfig.app.json"
+      }
+    },
+    "identidad-service": {
+      "type": "application",
+      "root": "apps/identidad-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/identidad-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/identidad-service/tsconfig.app.json"
+      }
+    }
+  },
+  "monorepo": true,
+  "root": "apps/fcsa-titulacion-backend"
+}
