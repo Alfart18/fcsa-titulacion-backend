@@ -24,6 +24,12 @@
     "strict": true,
     "strictPropertyInitialization": false,
     "paths": {
+      "@app/common": [
+        "./libs/common/src"
+      ],
+      "@app/common/*": [
+        "./libs/common/src/*"
+      ],
       "@app/database": [
         "./libs/database/src"
       ],
@@ -33,8 +39,6 @@
     }
   },
 
-  "include": ["src/**/*", "prisma/**/*", "apps/**/*", "libs/**/*"],
-
   "files": [],
   "references": [
     {
@@ -42,6 +46,9 @@
     },
     {
       "path": "./apps/identidad-service/tsconfig.app.json"
+    },
+    {
+      "path": "./apps/titulacion-service/tsconfig.app.json"
     }
   ]
 }

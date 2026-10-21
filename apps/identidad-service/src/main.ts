@@ -14,8 +14,8 @@ async function bootstrap() {
     }),
   );
 
-  const port = process.env.PORT || 4000;
+  const port = process.env.PORT_IDENTIDAD || 4000;
   await app.listen(port);
   console.log(`[Identidad-Service FCSa-UAC] Ejecutándose en http://localhost:${port}`);
 }
-bootstrap();
+void bootstrap();

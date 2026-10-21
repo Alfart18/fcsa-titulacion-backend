@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { IdentidadServiceService } from './identidad-service.service';
-import { JwtRolesGuard, Roles } from './guards/jwt-roles.guard';
+import { JwtRolesGuard, Roles } from '@app/common';
 import { RolUsuario } from '@prisma/client';
 import { LoginDto } from './dto/login.dto';
 import { CrearUsuarioDto } from './dto/crear-usuario.dto';

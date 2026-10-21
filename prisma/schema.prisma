@@ -18,6 +18,11 @@ enum EstadoUsuario {
   DESACTIVADO
 }
 
+enum EstadoDocente {
+  ACTIVO
+  INACTIVO
+}
+
 model ConfiguracionInstitucional {
   id                Int      @id @default(autoincrement())
   facultad          String   @default("Facultad de Ciencias de la Salud") @db.VarChar(200)
@@ -45,6 +50,45 @@ model Usuario {
   auditorias       RegistroAuditoria[]
 
   @@map("usuarios")
+}
+
+model DepartamentoAcademico {
+  id       Int                  @id @default(autoincrement())
+  nombre   String               @unique @db.VarChar(180)
+  activo   Boolean              @default(true)
+  escuelas EscuelaProfesional[]
+  docentes Docente[]
+
+  @@map("departamentos_academicos")
+}
+
+model EscuelaProfesional {
+  id                    Int                   @id @default(autoincrement())
+  nombre                String                @unique @db.VarChar(180)
+  gradoBachiller        String                @map("grado_bachiller") @db.VarChar(200)
+  tituloProfesional     String                @map("titulo_profesional") @db.VarChar(220)
+  departamentoDefectoId Int                   @map("departamento_defecto_id")
+  departamentoDefecto   DepartamentoAcademico @relation(fields: [departamentoDefectoId], references: [id])
+  activa                Boolean               @default(true)
+  docentes              Docente[]
+
+  @@map("escuelas_profesionales")
+}
+
+model Docente {
+  id                      String                @id @default(uuid()) @db.Uuid
+  gradoAcademico          String                @map("grado_academico") @db.VarChar(30)
+  nombresCompletos        String                @map("nombres_completos") @db.VarChar(200)
+  correo                  String                @unique @db.VarChar(150)
+  departamentoAcademicoId Int                   @map("departamento_academico_id")
+  departamentoAcademico   DepartamentoAcademico @relation(fields: [departamentoAcademicoId], references: [id])
+  escuelaProfesionalId    Int                   @map("escuela_profesional_id")
+  escuelaProfesional      EscuelaProfesional    @relation(fields: [escuelaProfesionalId], references: [id])
+  estado                  EstadoDocente         @default(ACTIVO)
+  creadoEn                DateTime              @default(now()) @map("creado_en")
+  actualizadoEn           DateTime              @updatedAt @map("actualizado_en")
+
+  @@map("docentes")
 }
 
 model RegistroAuditoria {
