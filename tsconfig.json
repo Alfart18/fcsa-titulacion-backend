@@ -49,6 +49,9 @@
     },
     {
       "path": "./apps/titulacion-service/tsconfig.app.json"
+    },
+    {
+      "path": "./apps/documentos-service/tsconfig.app.json"
     }
   ]
 }

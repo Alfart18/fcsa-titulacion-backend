@@ -26,6 +26,15 @@
         "tsConfigPath": "libs/database/tsconfig.lib.json"
       }
     },
+    "documentos-service": {
+      "type": "application",
+      "root": "apps/documentos-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/documentos-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/documentos-service/tsconfig.app.json"
+      }
+    },
     "fcsa-titulacion-backend": {
       "type": "application",
       "root": "apps/fcsa-titulacion-backend",
