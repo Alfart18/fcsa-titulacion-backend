@@ -7,6 +7,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ============================================================================
+// ENUMS DEL SISTEMA
+// ============================================================================
+
 enum RolUsuario {
   DECANO
   SECRETARIA_ACADEMICA
@@ -23,6 +27,76 @@ enum EstadoDocente {
   INACTIVO
 }
 
+enum AmbitoCausa {
+  CAMBIO_ASESOR
+  CAMBIO_DICTAMINANTE
+  DSE
+  DOCUMENTO_EXTERNO
+}
+
+enum EstadoExpediente {
+  ACTIVO
+  TITULADO
+  ANULADO
+}
+
+enum EstadoTesista {
+  ACTIVO
+  APTO
+  DESISTIDO
+  TITULADO
+}
+
+enum SerieNumeracion {
+  ORD
+  CF
+}
+
+enum CategoriaNumeracion {
+  TITULACION
+  ADMINISTRATIVO
+}
+
+enum SituacionJuridicaRes {
+  VIGENTE
+  MODIFICADA
+  SIN_EFECTO
+}
+
+enum EstadoDocumentalRes {
+  EMITIDO
+  FIRMADO
+}
+
+enum OrigenResolucion {
+  SISTEMA
+  HISTORICO
+}
+
+enum ModalidadSustentacion {
+  PRESENCIAL
+  VIRTUAL
+}
+
+enum TipoResolucion {
+  ASESOR
+  DICTAMEN
+  INSCRIPCION
+  TERCER_DICT
+  APTO
+  FECHA_HORA
+  TITULO
+  CAMBIO_ASESOR
+  CAMBIO_TITULO
+  CAMBIO_DICTAMINANTE
+  DSE
+  DESISTIMIENTO
+}
+
+// ============================================================================
+// FASE 1: CONFIGURACIÓN, IDENTIDAD Y ACCESOS
+// ============================================================================
+
 model ConfiguracionInstitucional {
   id                Int      @id @default(autoincrement())
   facultad          String   @default("Facultad de Ciencias de la Salud") @db.VarChar(200)
@@ -36,21 +110,28 @@ model ConfiguracionInstitucional {
 }
 
 model Usuario {
-  id               String              @id @default(uuid()) @db.Uuid
-  nombresCompletos String              @map("nombres_completos") @db.VarChar(180)
-  gradoTitulo      String              @default("Dr.") @map("grado_titulo") @db.VarChar(50)
-  correo           String              @unique @db.VarChar(150)
-  passwordHash     String              @map("password_hash")
-  iniciales        String              @db.VarChar(10)
-  rol              RolUsuario
-  estado           EstadoUsuario       @default(ACTIVO)
-  esDecanoFirmante Boolean             @default(false) @map("es_decano_firmante")
-  creadoEn         DateTime            @default(now()) @map("creado_en")
-  actualizadoEn    DateTime            @updatedAt @map("actualizado_en")
-  auditorias       RegistroAuditoria[]
+  id                  String              @id @default(uuid()) @db.Uuid
+  nombresCompletos    String              @map("nombres_completos") @db.VarChar(180)
+  gradoTitulo         String              @default("Dr.") @map("grado_titulo") @db.VarChar(50)
+  correo              String              @unique @db.VarChar(150)
+  passwordHash        String              @map("password_hash")
+  iniciales           String              @db.VarChar(10)
+  rol                 RolUsuario
+  estado              EstadoUsuario       @default(ACTIVO)
+  esDecanoFirmante    Boolean             @default(false) @map("es_decano_firmante")
+  creadoEn            DateTime            @default(now()) @map("creado_en")
+  actualizadoEn       DateTime            @updatedAt @map("actualizado_en")
+  expedientesCreados  Expediente[]
+  resolucionesEmitidas Resolucion[]
+  registrosNumeracion LibroNumeracion[]
+  auditorias          RegistroAuditoria[]
 
   @@map("usuarios")
 }
+
+// ============================================================================
+// FASE 2: CATÁLOGOS ACADÉMICOS, DOCENTES Y CAUSAS
+// ============================================================================
 
 model DepartamentoAcademico {
   id       Int                  @id @default(autoincrement())
@@ -71,6 +152,8 @@ model EscuelaProfesional {
   departamentoDefecto   DepartamentoAcademico @relation(fields: [departamentoDefectoId], references: [id])
   activa                Boolean               @default(true)
   docentes              Docente[]
+  expedientes           Expediente[]
+  asientosLibro         LibroInscripcion[]
 
   @@map("escuelas_profesionales")
 }
@@ -91,6 +174,216 @@ model Docente {
   @@map("docentes")
 }
 
+model CatalogoCausa {
+  id                    Int         @id @default(autoincrement())
+  ambito                AmbitoCausa
+  descripcion           String      @db.VarChar(160)
+  requiereDetalleManual Boolean     @default(false) @map("requiere_detalle_manual")
+  activo                Boolean     @default(true)
+  creadoEn              DateTime    @default(now()) @map("creado_en")
+  actualizadoEn         DateTime    @updatedAt @map("actualizado_en")
+
+  @@unique([ambito, descripcion])
+  @@map("catalogo_causas")
+}
+
+// ============================================================================
+// FASE 3: CONTADORES ATÓMICOS, EXPEDIENTES, TESISTAS Y RESOLUCIONES
+// ============================================================================
+
+model ContadorExpediente {
+  anio          Int      @id @db.SmallInt
+  ultimoNumero  Int      @default(0) @map("ultimo_numero")
+  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+
+  @@map("contadores_expediente")
+}
+
+model ContadorSerie {
+  anio          Int             @db.SmallInt
+  serie         SerieNumeracion
+  ultimoNumero  Int             @default(0) @map("ultimo_numero")
+  actualizadoEn DateTime        @updatedAt @map("actualizado_en")
+
+  @@id([anio, serie])
+  @@map("contadores_serie")
+}
+
+model ContadorLibroInscripcion {
+  escuelaProfesionalId Int      @map("escuela_profesional_id")
+  anio                 Int      @db.SmallInt
+  ultimoAsiento        Int      @default(0) @map("ultimo_asiento")
+  actualizadoEn        DateTime @updatedAt @map("actualizado_en")
+
+  @@id([escuelaProfesionalId, anio])
+  @@map("contadores_libro_inscripcion")
+}
+
+model Expediente {
+  id                          String             @id @default(uuid()) @db.Uuid
+  codigoExpediente            String             @unique @map("codigo_expediente") @db.VarChar(30)
+  escuelaProfesionalId        Int                @map("escuela_profesional_id")
+  escuelaProfesional          EscuelaProfesional @relation(fields: [escuelaProfesionalId], references: [id])
+  estado                      EstadoExpediente   @default(ACTIVO)
+  cantidadTesistas            Int                @map("cantidad_tesistas") @db.SmallInt
+
+  // Punteros consolidados a la información vigente del expediente
+  asesorDocenteId             String?            @map("asesor_docente_id") @db.Uuid
+  asesorResolucionId          String?            @map("asesor_resolucion_id") @db.Uuid
+  tituloActual                String?            @map("titulo_actual")
+  tituloResolucionId          String?            @map("titulo_resolucion_id") @db.Uuid
+  departamentoDictaminantesId Int?               @map("departamento_dictaminantes_id")
+  dictaminante1Id             String?            @map("dictaminante_1_id") @db.Uuid
+  dictaminante2Id             String?            @map("dictaminante_2_id") @db.Uuid
+  dictaminante3Id             String?            @map("dictaminante_3_id") @db.Uuid
+  dictaminantesResolucionId   String?            @map("dictaminantes_resolucion_id") @db.Uuid
+  inscripcionResolucionId     String?            @map("inscripcion_resolucion_id") @db.Uuid
+  libroInscripcionId          String?            @map("libro_inscripcion_id") @db.Uuid
+  fechaHoraResolucionId       String?            @map("fecha_hora_resolucion_id") @db.Uuid
+
+  creadoPorId                 String             @map("creado_por_id") @db.Uuid
+  creadoPor                   Usuario            @relation(fields: [creadoPorId], references: [id])
+  creadoEn                    DateTime           @default(now()) @map("creado_en")
+  actualizadoEn               DateTime           @updatedAt @map("actualizado_en")
+
+  tesistas                    Tesista[]
+  resoluciones                Resolucion[]
+  asientosLibroInscripcion    LibroInscripcion[]
+
+  @@map("expedientes")
+}
+
+model Tesista {
+  id                    String        @id @default(uuid()) @db.Uuid
+  expedienteId          String        @map("expediente_id") @db.Uuid
+  expediente            Expediente    @relation(fields: [expedienteId], references: [id])
+  orden                 Int           @db.SmallInt
+  nombresApellidos      String        @map("nombres_apellidos") @db.VarChar(200)
+  codigoEstudiante      String        @map("codigo_estudiante") @db.VarChar(25)
+  estado                EstadoTesista @default(ACTIVO)
+
+  aptoResolucionId      String?       @map("apto_resolucion_id") @db.Uuid
+  tituloResolucionId    String?       @map("titulo_resolucion_id") @db.Uuid
+  fechaSustentacionReal DateTime?     @map("fecha_sustentacion_real") @db.Date
+  notaSustentacion      Int?          @map("nota_sustentacion") @db.SmallInt
+  resultadoSustentacion String?       @map("resultado_sustentacion") @db.VarChar(80)
+
+  creadoEn              DateTime      @default(now()) @map("creado_en")
+  actualizadoEn         DateTime      @updatedAt @map("actualizado_en")
+  resolucionesIndividuales Resolucion[]
+
+  // Permite que un tesista desistido o de un expediente anulado pueda iniciar un nuevo expediente futuro
+  @@unique([expedienteId, orden])
+  @@unique([expedienteId, codigoEstudiante])
+  @@map("tesistas")
+}
+
+model Resolucion {
+  id                      String               @id @default(uuid()) @db.Uuid
+  expedienteId            String               @map("expediente_id") @db.Uuid
+  expediente              Expediente           @relation(fields: [expedienteId], references: [id])
+  tipo                    TipoResolucion
+  serie                   SerieNumeracion
+  numeroCorrelativo       Int                  @map("numero_correlativo")
+  anioNumeracion          Int                  @map("anio_numeracion") @db.SmallInt
+  numeroCompleto          String               @unique @map("numero_completo") @db.VarChar(50)
+
+  tesistaId               String?              @map("tesista_id") @db.Uuid
+  tesista                 Tesista?             @relation(fields: [tesistaId], references: [id])
+
+  // Cadena de trazabilidad para resoluciones que modifican o reemplazan a una anterior
+  resolucionAntecedenteId String?              @map("resolucion_antecedente_id") @db.Uuid
+  resolucionAntecedente   Resolucion?          @relation("CadenaAntecedentes", fields: [resolucionAntecedenteId], references: [id])
+  resolucionesSucesoras   Resolucion[]         @relation("CadenaAntecedentes")
+
+  situacionJuridica       SituacionJuridicaRes @default(VIGENTE) @map("situacion_juridica")
+  estadoDocumental        EstadoDocumentalRes  @default(EMITIDO) @map("estado_documental")
+  origen                  OrigenResolucion     @default(SISTEMA)
+
+  fechaEmision            DateTime             @map("fecha_emision") @db.Date
+  nombreDecanoSnapshot    String               @map("nombre_decano_snapshot") @db.VarChar(180)
+  inicialesOperador       String               @map("iniciales_operador") @db.VarChar(10)
+
+  // Snapshot inmutable de los datos específicos del paso o resolución complementaria
+  datosEspecificos        Json                 @map("datos_especificos")
+
+  // Identificador de doble vía y control de versiones para validación de PDF firmado
+  idTramiteControl        String               @unique @map("id_tramite_control") @db.VarChar(60)
+  versionPdf              Int                  @default(1) @map("version_pdf") @db.SmallInt
+  hashVersionGenerado     String               @map("hash_version_generado") @db.VarChar(64)
+  pdfGeneradoPath         String?              @map("pdf_generado_path")
+  pdfFirmadoPath          String?              @map("pdf_firmado_path")
+  pdfFirmadoSha256        String?              @map("pdf_firmado_sha256") @db.VarChar(64)
+  fechaConfirmacionFirma  DateTime?            @map("fecha_confirmacion_firma")
+
+  usuarioEmisorId         String               @map("usuario_emisor_id") @db.Uuid
+  usuarioEmisor           Usuario              @relation(fields: [usuarioEmisorId], references: [id])
+  creadoEn                DateTime             @default(now()) @map("creado_en")
+  actualizadoEn           DateTime             @updatedAt @map("actualizado_en")
+
+  asientoLibroNumeracion  LibroNumeracion?
+  asientoLibroInscripcion LibroInscripcion?
+  resolucionesQueAnulo    DseAfectada[]        @relation("ResolucionQueAnula")
+  anuladaPorDse           DseAfectada[]        @relation("ResolucionAnulada")
+
+  @@map("resoluciones")
+}
+
+model DseAfectada {
+  resolucionDseId      String               @map("resolucion_dse_id") @db.Uuid
+  resolucionDse        Resolucion           @relation("ResolucionQueAnula", fields: [resolucionDseId], references: [id])
+  resolucionAfectadaId String               @map("resolucion_afectada_id") @db.Uuid
+  resolucionAfectada   Resolucion           @relation("ResolucionAnulada", fields: [resolucionAfectadaId], references: [id])
+  estadoPrevio         SituacionJuridicaRes @map("estado_previo")
+
+  @@id([resolucionDseId, resolucionAfectadaId])
+  @@map("dse_afectadas")
+}
+
+model LibroNumeracion {
+  id                   String              @id @default(uuid()) @db.Uuid
+  numeroCompleto       String              @unique @map("numero_completo") @db.VarChar(50)
+  numero               Int
+  anio                 Int                 @db.SmallInt
+  serie                SerieNumeracion
+  categoria            CategoriaNumeracion
+  tipoDocumentoExterno String?             @map("tipo_documento_externo") @db.VarChar(80)
+  descripcion          String
+  fechaDocumento       DateTime            @map("fecha_documento") @db.Date
+  registradoPorId      String              @map("registrado_por_id") @db.Uuid
+  registradoPor        Usuario             @relation(fields: [registradoPorId], references: [id])
+  resolucionId         String?             @unique @map("resolucion_id") @db.Uuid
+  resolucion           Resolucion?         @relation(fields: [resolucionId], references: [id])
+  creadoEn             DateTime            @default(now()) @map("creado_en")
+
+  @@unique([serie, anio, numero])
+  @@map("libro_numeracion")
+}
+
+model LibroInscripcion {
+  id                      String             @id @default(uuid()) @db.Uuid
+  escuelaProfesionalId    Int                @map("escuela_profesional_id")
+  escuelaProfesional      EscuelaProfesional @relation(fields: [escuelaProfesionalId], references: [id])
+  numeroAsiento           Int                @map("numero_asiento")
+  anio                    Int                @db.SmallInt
+  numeroFolioFormateado   String             @unique @map("numero_folio_formateado") @db.VarChar(40)
+  expedienteId            String             @map("expediente_id") @db.Uuid
+  expediente              Expediente         @relation(fields: [expedienteId], references: [id])
+  resolucionInscripcionId String             @unique @map("resolucion_inscripcion_id") @db.Uuid
+  resolucionInscripcion   Resolucion         @relation(fields: [resolucionInscripcionId], references: [id])
+
+  // Snapshot histórico inmutable del asiento físico de inscripción
+  tituloInscritoSnapshot  String             @map("titulo_inscrito_snapshot")
+  tesistasSnapshot        String             @map("tesistas_snapshot")
+  asesorSnapshot          String             @map("asesor_snapshot") @db.VarChar(200)
+  estadoAsiento           String             @default("ACTIVO") @map("estado_asiento") @db.VarChar(20)
+  fechaAsiento            DateTime           @map("fecha_asiento") @db.Date
+  creadoEn                DateTime           @default(now()) @map("creado_en")
+
+  @@unique([escuelaProfesionalId, anio, numeroAsiento])
+  @@map("libro_inscripcion")
+}
+
 model RegistroAuditoria {
   id               BigInt   @id @default(autoincrement())
   usuarioId        String   @map("usuario_id") @db.Uuid
@@ -99,6 +392,8 @@ model RegistroAuditoria {
   accion           String   @db.VarChar(50)
   entidad          String   @db.VarChar(60)
   entidadId        String?  @map("entidad_id") @db.VarChar(80)
+  expedienteId     String?  @map("expediente_id") @db.Uuid
+  resolucionId     String?  @map("resolucion_id") @db.Uuid
   detalle          Json
   fechaHora        DateTime @default(now()) @map("fecha_hora")
 

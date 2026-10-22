@@ -1,4 +1,10 @@
-import { PrismaClient, RolUsuario, EstadoUsuario, EstadoDocente } from '@prisma/client';
+import {
+  PrismaClient,
+  RolUsuario,
+  EstadoUsuario,
+  EstadoDocente,
+  AmbitoCausa,
+} from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
@@ -19,7 +25,7 @@ async function main() {
     },
   });
 
-  // 2. Usuarios Institucionales (Fase 1)
+  // 2. Usuarios Institucionales Reales (Fase 1)
   await prisma.usuario.updateMany({
     where: { correo: { not: 'jarenas@uandina.edu.pe' } },
     data: { esDecanoFirmante: false },
@@ -27,7 +33,14 @@ async function main() {
 
   await prisma.usuario.upsert({
     where: { correo: 'jarenas@uandina.edu.pe' },
-    update: {},
+    update: {
+      nombresCompletos: 'JESUS ALEJANDRO ARENAS FERNANDEZ DAVILA',
+      gradoTitulo: 'Dr.',
+      iniciales: 'JAAFD',
+      rol: RolUsuario.DECANO,
+      estado: EstadoUsuario.ACTIVO,
+      esDecanoFirmante: true,
+    },
     create: {
       nombresCompletos: 'JESUS ALEJANDRO ARENAS FERNANDEZ DAVILA',
       gradoTitulo: 'Dr.',
@@ -42,7 +55,14 @@ async function main() {
 
   await prisma.usuario.upsert({
     where: { correo: 'avaler@uandina.edu.pe' },
-    update: {},
+    update: {
+      nombresCompletos: 'AIDA VALER CONTRERAS',
+      gradoTitulo: 'Lic.',
+      iniciales: 'AVC',
+      rol: RolUsuario.SECRETARIA_ACADEMICA,
+      estado: EstadoUsuario.ACTIVO,
+      esDecanoFirmante: false,
+    },
     create: {
       nombresCompletos: 'AIDA VALER CONTRERAS',
       gradoTitulo: 'Lic.',
@@ -57,7 +77,14 @@ async function main() {
 
   await prisma.usuario.upsert({
     where: { correo: 'achuchullo@uandina.edu.pe' },
-    update: {},
+    update: {
+      nombresCompletos: 'ALEXANDER JOSE CHUCHULLO ROJAS',
+      gradoTitulo: 'Ing.',
+      iniciales: 'AJCR',
+      rol: RolUsuario.ADMINISTRATIVO,
+      estado: EstadoUsuario.ACTIVO,
+      esDecanoFirmante: false,
+    },
     create: {
       nombresCompletos: 'ALEXANDER JOSE CHUCHULLO ROJAS',
       gradoTitulo: 'Ing.',
@@ -70,7 +97,7 @@ async function main() {
     },
   });
 
-  // 3. Los 4 Departamentos Académicos Oficiales de la FCSa
+  // 3. Los 4 Departamentos Académicos Oficiales (Fase 2)
   const deptoMedicina = await prisma.departamentoAcademico.upsert({
     where: { nombre: 'Departamento Académico de Medicina Humana' },
     update: {},
@@ -95,10 +122,14 @@ async function main() {
     create: { nombre: 'Departamento Académico de Psicología' },
   });
 
-  // 4. Las 6 Escuelas Profesionales
+  // 4. Las 6 Escuelas Profesionales con Grados y Títulos de Estudiantes (Fase 2)
   const escMedicina = await prisma.escuelaProfesional.upsert({
     where: { nombre: 'Escuela Profesional de Medicina Humana' },
-    update: {},
+    update: {
+      gradoBachiller: 'Bachiller en Medicina Humana',
+      tituloProfesional: 'Médico Cirujano',
+      departamentoDefectoId: deptoMedicina.id,
+    },
     create: {
       nombre: 'Escuela Profesional de Medicina Humana',
       gradoBachiller: 'Bachiller en Medicina Humana',
@@ -109,7 +140,11 @@ async function main() {
 
   const escTecMedica = await prisma.escuelaProfesional.upsert({
     where: { nombre: 'Escuela Profesional de Tecnología Médica' },
-    update: {},
+    update: {
+      gradoBachiller: 'Bachiller en Tecnología Médica',
+      tituloProfesional: 'Tecnólogo Médico con mención en Terapia Física y Rehabilitación',
+      departamentoDefectoId: deptoMedicina.id,
+    },
     create: {
       nombre: 'Escuela Profesional de Tecnología Médica',
       gradoBachiller: 'Bachiller en Tecnología Médica',
@@ -120,7 +155,11 @@ async function main() {
 
   const escObstetricia = await prisma.escuelaProfesional.upsert({
     where: { nombre: 'Escuela Profesional de Obstetricia' },
-    update: {},
+    update: {
+      gradoBachiller: 'Bachiller en Obstetricia',
+      tituloProfesional: 'Obstetra',
+      departamentoDefectoId: deptoObsEnf.id,
+    },
     create: {
       nombre: 'Escuela Profesional de Obstetricia',
       gradoBachiller: 'Bachiller en Obstetricia',
@@ -131,7 +170,11 @@ async function main() {
 
   const escEnfermeria = await prisma.escuelaProfesional.upsert({
     where: { nombre: 'Escuela Profesional de Enfermería' },
-    update: {},
+    update: {
+      gradoBachiller: 'Bachiller en Enfermería',
+      tituloProfesional: 'Licenciado en Enfermería',
+      departamentoDefectoId: deptoObsEnf.id,
+    },
     create: {
       nombre: 'Escuela Profesional de Enfermería',
       gradoBachiller: 'Bachiller en Enfermería',
@@ -142,7 +185,11 @@ async function main() {
 
   const escEstomatologia = await prisma.escuelaProfesional.upsert({
     where: { nombre: 'Escuela Profesional de Estomatología' },
-    update: {},
+    update: {
+      gradoBachiller: 'Bachiller en Estomatología',
+      tituloProfesional: 'Cirujano Dentista',
+      departamentoDefectoId: deptoEstomatologia.id,
+    },
     create: {
       nombre: 'Escuela Profesional de Estomatología',
       gradoBachiller: 'Bachiller en Estomatología',
@@ -153,7 +200,11 @@ async function main() {
 
   const escPsicologia = await prisma.escuelaProfesional.upsert({
     where: { nombre: 'Escuela Profesional de Psicología' },
-    update: {},
+    update: {
+      gradoBachiller: 'Bachiller en Psicología',
+      tituloProfesional: 'Psicólogo',
+      departamentoDefectoId: deptoPsicologia.id,
+    },
     create: {
       nombre: 'Escuela Profesional de Psicología',
       gradoBachiller: 'Bachiller en Psicología',
@@ -162,7 +213,7 @@ async function main() {
     },
   });
 
-  // 5. Los 9 Docentes Reales de la FCSa
+  // 5. Los 9 Docentes Reales de la FCSa (Fase 2)
   const docentesSeed = [
     { gradoAcademico: 'Mg.', nombresCompletos: 'ÉRIKA SOFÍA PÉREZ VÉLEZ', correo: 'eperez@uandina.edu.pe', departamentoAcademicoId: deptoMedicina.id, escuelaProfesionalId: escMedicina.id },
     { gradoAcademico: 'Dra.', nombresCompletos: 'CRISTABEL NILDA RIVAS ACHAHUI', correo: 'crivas@uandina.edu.pe', departamentoAcademicoId: deptoMedicina.id, escuelaProfesionalId: escMedicina.id },
@@ -178,14 +229,87 @@ async function main() {
   for (const doc of docentesSeed) {
     await prisma.docente.upsert({
       where: { correo: doc.correo },
-      update: {},
-      create: { ...doc, estado: EstadoDocente.ACTIVO },
+      update: {
+        gradoAcademico: doc.gradoAcademico,
+        nombresCompletos: doc.nombresCompletos,
+        departamentoAcademicoId: doc.departamentoAcademicoId,
+        escuelaProfesionalId: doc.escuelaProfesionalId,
+        estado: EstadoDocente.ACTIVO,
+      },
+      create: {
+        ...doc,
+        estado: EstadoDocente.ACTIVO,
+      },
     });
   }
 
-  console.log('Seed completo: Usuarios, Departamentos, Escuelas y Docentes insertados.');
+  // 6. Catálogo de Causas Oficiales y Tipos de Documentos Externos (Fase 3)
+  const causasSeed: Array<{
+    ambito: AmbitoCausa;
+    descripcion: string;
+    requiereDetalleManual: boolean;
+  }> = [
+    // Ámbito 1: Cambio de Asesor
+    { ambito: AmbitoCausa.CAMBIO_ASESOR, descripcion: 'Cese del vínculo laboral', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.CAMBIO_ASESOR, descripcion: 'Renuncia', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.CAMBIO_ASESOR, descripcion: 'Licencia', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.CAMBIO_ASESOR, descripcion: 'Imposibilidad de continuar con el asesoramiento', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.CAMBIO_ASESOR, descripcion: 'Otra', requiereDetalleManual: true },
+
+    // Ámbito 2: Cambio de Dictaminante
+    { ambito: AmbitoCausa.CAMBIO_DICTAMINANTE, descripcion: 'Cese del vínculo laboral', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.CAMBIO_DICTAMINANTE, descripcion: 'Licencia', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.CAMBIO_DICTAMINANTE, descripcion: 'Incompatibilidad de horarios', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.CAMBIO_DICTAMINANTE, descripcion: 'Incumplimiento del plazo', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.CAMBIO_DICTAMINANTE, descripcion: 'Otra causa justificada', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.CAMBIO_DICTAMINANTE, descripcion: 'Otra', requiereDetalleManual: true },
+
+    // Ámbito 3: Dejar Sin Efecto - DSE
+    { ambito: AmbitoCausa.DSE, descripcion: 'Solicitud del tesista', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.DSE, descripcion: 'Error material', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.DSE, descripcion: 'Error administrativo', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.DSE, descripcion: 'Duplicidad del procedimiento', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.DSE, descripcion: 'Reinicio del proceso de titulación', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.DSE, descripcion: 'Regularización del expediente', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.DSE, descripcion: 'Otro', requiereDetalleManual: true },
+
+    // Ámbito 4: Tipos de Documentos Administrativos Externos
+    { ambito: AmbitoCausa.DOCUMENTO_EXTERNO, descripcion: 'Oficio', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.DOCUMENTO_EXTERNO, descripcion: 'Memorándum', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.DOCUMENTO_EXTERNO, descripcion: 'Resolución de Auspicio Académico', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.DOCUMENTO_EXTERNO, descripcion: 'Resolución de Aprobación de Horarios / Comisiones', requiereDetalleManual: false },
+    { ambito: AmbitoCausa.DOCUMENTO_EXTERNO, descripcion: 'Otro', requiereDetalleManual: true },
+  ];
+
+  for (const item of causasSeed) {
+    await prisma.catalogoCausa.upsert({
+      where: {
+        ambito_descripcion: {
+          ambito: item.ambito,
+          descripcion: item.descripcion,
+        },
+      },
+      update: {
+        requiereDetalleManual: item.requiereDetalleManual,
+        activo: true,
+      },
+      create: {
+        ambito: item.ambito,
+        descripcion: item.descripcion,
+        requiereDetalleManual: item.requiereDetalleManual,
+        activo: true,
+      },
+    });
+  }
+
+  console.log('Seed Fase 3 completado: Usuarios, Escuelas, Docentes y Catálogo de Causas listos.');
 }
 
 main()
-  .catch((e) => { console.error(e); process.exit(1); })
-  .finally(async () => { await prisma.$disconnect(); });
+  .catch((e) => {
+    console.error('Error en seed:', e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
