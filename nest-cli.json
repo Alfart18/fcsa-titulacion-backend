@@ -44,6 +44,15 @@
         "tsConfigPath": "apps/fcsa-titulacion-backend/tsconfig.app.json"
       }
     },
+    "firmas-service": {
+      "type": "application",
+      "root": "apps/firmas-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/firmas-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/firmas-service/tsconfig.app.json"
+      }
+    },
     "identidad-service": {
       "type": "application",
       "root": "apps/identidad-service",

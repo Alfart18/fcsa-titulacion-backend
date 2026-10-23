@@ -52,6 +52,9 @@
     },
     {
       "path": "./apps/documentos-service/tsconfig.app.json"
+    },
+    {
+      "path": "./apps/firmas-service/tsconfig.app.json"
     }
   ]
 }
