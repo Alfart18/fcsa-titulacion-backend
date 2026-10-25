@@ -2003,7 +2003,7 @@ export class ResolucionesService {
     ]);
     const datosTitulo = (resTituloVigente?.datosEspecificos as Record<string, unknown>) || null;
     const tituloRecuperado = datosTitulo
-      ? String(datosTitulo.debeDecirNuevoTitulo || datosTitulo.tituloProyecto || '')
+      ? String((datosTitulo.debeDecirNuevoTitulo as string) || (datosTitulo.tituloProyecto as string) || '')
       : null;
 
     // 3. Punteros de Dictaminantes
@@ -2076,9 +2076,9 @@ export class ResolucionesService {
           notaSustentacion: datosTit ? Number(datosTit.notaSustentacion) : null,
           resultadoSustentacion: datosTit ? String(datosTit.resultadoSustentacion) : null,
           fechaSustentacionReal:
-            datosTit && datosTit.fechaSustentacionReal
-              ? new Date(`${String(datosTit.fechaSustentacionReal)}T00:00:00.000Z`)
-              : null,
+  datosTit && datosTit.fechaSustentacionReal
+    ? new Date(`${String(datosTit.fechaSustentacionReal as string)}T00:00:00.000Z`)
+    : null,
           estado: nuevoEstadoTesista,
         },
       });
@@ -2103,7 +2103,7 @@ export class ResolucionesService {
         dictaminante1Id: datosDict ? String(datosDict.dictaminante1Id) : null,
         dictaminante2Id: datosDict ? String(datosDict.dictaminante2Id) : null,
         dictaminante3Id:
-          datosDict && datosDict.dictaminante3Id ? String(datosDict.dictaminante3Id) : null,
+  datosDict && datosDict.dictaminante3Id ? String(datosDict.dictaminante3Id as string) : null,
         dictaminantesResolucionId: resDictVigente ? resDictVigente.id : null,
         inscripcionResolucionId: resInscripcionVigente ? resInscripcionVigente.id : null,
         libroInscripcionId: asientoLibroActivo ? asientoLibroActivo.id : null,

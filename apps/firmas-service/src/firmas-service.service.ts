@@ -570,18 +570,28 @@ export class FirmasServiceService implements OnModuleInit {
       hexLimpio = matchesContents[matchesContents.length - 1][1].replace(/\s+/g, '');
     }
 
-    // Quitar el relleno de ceros (padding) final del contenedor DER
+        // Quitar el relleno de ceros (padding) final del contenedor DER
     const derBufferCompleto = Buffer.from(hexLimpio, 'hex');
+
+    // 🔥 CORTAR LOS CEROS FINALES (PADDING)
+    let finDer = derBufferCompleto.length;
+    while (finDer > 0 && derBufferCompleto[finDer - 1] === 0) {
+      finDer--;
+    }
+    const derBufferLimpio = derBufferCompleto.subarray(0, finDer);
 
     let asn1Obj: forge.asn1.Asn1;
     let p7Msg: any;
     try {
-        asn1Obj = forge.asn1.fromDer(
-        forge.util.createBuffer(derBufferCompleto.toString('binary')),
+      // @ts-ignore
+      asn1Obj = forge.asn1.fromDer(
+        forge.util.createBuffer(derBufferLimpio.toString('binary')),
         false,
       );
       p7Msg = forge.pkcs7.messageFromAsn1(asn1Obj);
-    } catch {
+    } catch (err) {
+      console.log('Error parseando PKCS7:', err); // Para depuración
+
       throw new BadRequestException(
         'PKCS7_CORRUPTO: La estructura criptográfica ASN.1 PKCS#7/CAdES no es válida o fue alterada.',
       );
@@ -625,7 +635,7 @@ export class FirmasServiceService implements OnModuleInit {
         if (oidStr === forge.pki.oids.messageDigest) {
           const setVal = attr.value[1];
           if (Array.isArray(setVal.value) && setVal.value[0]) {
-            const digestBinary = String(setVal.value[0].value);
+            const digestBinary = String(setVal.value[0].value as string);
             messageDigestExtraidoHex = Buffer.from(digestBinary, 'binary')
               .toString('hex')
               .toLowerCase();
