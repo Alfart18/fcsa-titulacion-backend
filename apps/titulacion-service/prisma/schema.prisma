@@ -1,0 +1,470 @@
+// Ruta: prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+enum RolUsuario {
+  ADMIN
+  DECANO
+  SECRETARIA_ACADEMICA
+  ADMINISTRATIVO
+}
+
+enum EstadoUsuario {
+  ACTIVO
+  DESACTIVADO
+}
+
+enum EstadoDocente {
+  ACTIVO
+  INACTIVO
+  CESANTE
+}
+
+enum EstadoExpediente {
+  EN_PROCESO
+  FINALIZADO
+  ANULADO
+}
+
+enum EstadoTesista {
+  ACTIVO
+  APTO
+  DESISTIDO
+  TITULADO
+}
+
+enum SerieNumeracion {
+  ORD
+  CF
+}
+
+enum CategoriaNumeracion {
+  TITULACION
+  ADMINISTRATIVO
+}
+
+enum SituacionJuridicaRes {
+  VIGENTE
+  MODIFICADA
+  SIN_EFECTO
+}
+
+enum EstadoDocumentalRes {
+  EMITIDO
+  FIRMADO
+}
+
+enum OrigenResolucion {
+  SISTEMA
+  HISTORICO
+}
+
+enum ModalidadSustentacion {
+  PRESENCIAL
+  VIRTUAL
+}
+
+enum AmbitoCausa {
+  CAMBIO_ASESOR
+  CAMBIO_DICTAMINANTE
+  DSE
+  DOCUMENTO_EXTERNO
+}
+
+enum TipoResolucion {
+  ASESOR
+  DICTAMEN
+  INSCRIPCION
+  TERCER_DICT
+  APTO
+  FECHA_HORA
+  TITULO
+  COASESOR
+  CAMBIO_ASESOR
+  CAMBIO_TITULO
+  CAMBIO_DICTAMINANTE
+  DSE
+  DESISTIMIENTO
+}
+
+enum TipoImpactoResolucion {
+  MODIFICA
+  DEJA_SIN_EFECTO
+}
+
+// ============================================================================
+// SEGURIDAD Y CONFIGURACIÓN
+// ============================================================================
+model Usuario {
+  id                   String              @id @default(uuid()) @db.Uuid
+  nombresCompletos     String              @db.VarChar(180)
+  gradoTitulo          String              @default("Dr.") @db.VarChar(50)
+  correo               String              @unique @db.VarChar(150)
+  passwordHash         String
+  iniciales            String              @db.VarChar(10)
+  rol                  RolUsuario
+  estado               EstadoUsuario       @default(ACTIVO)
+  esDecanoFirmante     Boolean             @default(false)
+  creadoEn             DateTime            @default(now())
+  actualizadoEn        DateTime            @updatedAt
+  expedientesCreados   Expediente[]
+  resolucionesEmitidas Resolucion[]
+  librosRegistrados    LibroNumeracion[]
+  auditorias           RegistroAuditoria[]
+
+  @@map("usuarios")
+}
+
+model ConfiguracionInstitucional {
+  id                Int      @id @default(autoincrement())
+  facultad          String   @default("Facultad de Ciencias de la Salud") @db.VarChar(200)
+  universidad       String   @default("Universidad Andina del Cusco") @db.VarChar(200)
+  ciudad            String   @default("Cusco") @db.VarChar(100)
+  siglasFacultad    String   @default("FCSa") @db.VarChar(20)
+  siglasUniversidad String   @default("UAC") @db.VarChar(20)
+  reglamentoMarco   String   @default("Resolución N.º 513-CU-2024-UAC") @db.VarChar(150)
+  actualizadoEn     DateTime @updatedAt
+
+  @@map("configuracion_institucional")
+}
+
+// ============================================================================
+// CATÁLOGOS ACADÉMICOS
+// ============================================================================
+model DepartamentoAcademico {
+  id                    Int                  @id @default(autoincrement())
+  nombre                String               @unique @db.VarChar(180)
+  activo                Boolean              @default(true)
+  docentes              Docente[]
+  escuelasProfesionales EscuelaProfesional[]
+
+  @@map("departamentos_academicos")
+}
+
+model EscuelaProfesional {
+  id                    Int                   @id @default(autoincrement())
+  nombre                String                @unique @db.VarChar(180)
+  siglasDocumento       String                @unique @db.VarChar(20)
+  gradoBachiller        String                @db.VarChar(200)
+  tituloProfesional     String                @db.VarChar(220)
+  departamentoDefectoId Int
+  departamentoDefecto   DepartamentoAcademico @relation(fields: [departamentoDefectoId], references: [id])
+  activa                Boolean               @default(true)
+  docentes              Docente[]
+  expedientes           Expediente[]
+  librosInscripcion     LibroInscripcion[]
+  librosTitulos         LibroTitulo[]
+
+  @@map("escuelas_profesionales")
+}
+
+// ============================================================================
+// PERSONAS (Docente + Tesista unificados vía Persona)
+// ============================================================================
+model Persona {
+  id                  String    @id @default(uuid()) @db.Uuid
+  nombres             String    @db.VarChar(120)
+  apellidoPaterno     String    @db.VarChar(100)
+  apellidoMaterno     String    @db.VarChar(100)
+  nombreCompleto      String    @db.VarChar(250)
+  correo              String?   @unique @db.VarChar(150)
+  telefono            String?   @db.VarChar(30)
+  codigoUniversitario String?   @unique @db.VarChar(20)
+  esDocente           Boolean   @default(false)
+  esEstudiante        Boolean   @default(false)
+  creadoEn            DateTime  @default(now())
+  actualizadoEn       DateTime  @updatedAt
+  docente             Docente?
+  tesista             Tesista[]
+
+  @@index([nombreCompleto])
+  @@index([codigoUniversitario])
+  @@map("personas")
+}
+
+model Docente {
+  id                      String                @id @default(uuid()) @db.Uuid
+  personaId               String                @unique @db.Uuid
+  persona                 Persona               @relation(fields: [personaId], references: [id], onDelete: Restrict)
+  gradoAcademico          String                @db.VarChar(30)
+  departamentoAcademicoId Int
+  departamentoAcademico   DepartamentoAcademico @relation(fields: [departamentoAcademicoId], references: [id])
+  escuelaProfesionalId    Int
+  escuelaProfesional      EscuelaProfesional    @relation(fields: [escuelaProfesionalId], references: [id])
+  estado                  EstadoDocente         @default(ACTIVO)
+  creadoEn                DateTime              @default(now())
+  actualizadoEn           DateTime              @updatedAt
+
+  @@index([estado])
+  @@map("docentes")
+}
+
+model CatalogoCausa {
+  id                    Int         @id @default(autoincrement())
+  ambito                AmbitoCausa
+  descripcion           String      @db.VarChar(160)
+  requiereDetalleManual Boolean     @default(false)
+  activo                Boolean     @default(true)
+  creadoEn              DateTime    @default(now())
+  actualizadoEn         DateTime    @updatedAt
+
+  @@unique([ambito, descripcion])
+  @@map("catalogo_causas")
+}
+
+// ============================================================================
+// CONTADORES ATÓMICOS
+// ============================================================================
+model ContadorExpediente {
+  anio          Int      @id @db.SmallInt
+  ultimoNumero  Int      @default(0)
+  actualizadoEn DateTime @updatedAt
+
+  @@map("contadores_expediente")
+}
+
+model ContadorSerie {
+  anio          Int             @db.SmallInt
+  serie         SerieNumeracion
+  ultimoNumero  Int             @default(0)
+  actualizadoEn DateTime        @updatedAt
+
+  @@id([anio, serie])
+  @@map("contadores_serie")
+}
+
+model ContadorLibroInscripcion {
+  escuelaProfesionalId Int      @db.Integer
+  anio                 Int      @db.SmallInt
+  ultimoAsiento        Int      @default(0)
+  actualizadoEn        DateTime @updatedAt
+
+  @@id([escuelaProfesionalId, anio])
+  @@map("contadores_libro_inscripcion")
+}
+
+model ContadorLibroTitulo {
+  escuelaProfesionalId Int      @db.Integer
+  anio                 Int      @db.SmallInt
+  ultimoRegistro       Int      @default(0)
+  actualizadoEn        DateTime @updatedAt
+
+  @@id([escuelaProfesionalId, anio])
+  @@map("contadores_libro_titulo")
+}
+
+// ============================================================================
+// EXPEDIENTES Y TESISTAS
+// ============================================================================
+model Expediente {
+  id                          String             @id @default(uuid()) @db.Uuid
+  codigoExpediente            String             @unique @db.VarChar(30)
+  escuelaProfesionalId        Int
+  escuelaProfesional          EscuelaProfesional @relation(fields: [escuelaProfesionalId], references: [id])
+  estado                      EstadoExpediente   @default(EN_PROCESO)
+  cantidadTesistas            Int                @db.SmallInt
+  pasoActual                  Int                @default(1)
+  asesorDocenteId             String?            @db.Uuid
+  asesorResolucionId          String?            @db.Uuid
+  tituloActual                String?
+  tituloResolucionId          String?            @db.Uuid
+  departamentoDictaminantesId Int?
+  dictaminante1Id             String?            @db.Uuid
+  dictaminante2Id             String?            @db.Uuid
+  dictaminante3Id             String?            @db.Uuid
+  dictaminantesResolucionId   String?            @db.Uuid
+  inscripcionResolucionId     String?            @db.Uuid
+  libroInscripcionId          String?            @db.Uuid
+  fechaHoraResolucionId       String?            @db.Uuid
+  creadoPorId                 String             @db.Uuid
+  creadoPor                   Usuario            @relation(fields: [creadoPorId], references: [id])
+  creadoEn                    DateTime           @default(now())
+  actualizadoEn               DateTime           @updatedAt
+  tesistas                    Tesista[]
+  resoluciones                Resolucion[]
+  asientosLibroInscripcion    LibroInscripcion[]
+  asientosLibroTitulo         LibroTitulo[]
+
+  @@map("expedientes")
+}
+
+model Tesista {
+  id                       String        @id @default(uuid()) @db.Uuid
+  personaId                String        @db.Uuid
+  persona                  Persona       @relation(fields: [personaId], references: [id], onDelete: Restrict)
+  expedienteId             String        @db.Uuid
+  expediente               Expediente    @relation(fields: [expedienteId], references: [id], onDelete: Cascade)
+  orden                    Int           @db.SmallInt
+  estado                   EstadoTesista @default(ACTIVO)
+  aptoResolucionId         String?       @db.Uuid
+  tituloResolucionId       String?       @db.Uuid
+  fechaSustentacionReal    DateTime?     @db.Date
+  notaSustentacion         Int?          @db.SmallInt
+  resultadoSustentacion    String?       @db.VarChar(80)
+  creadoEn                 DateTime      @default(now())
+  actualizadoEn            DateTime      @updatedAt
+  resolucionesIndividuales Resolucion[]  @relation("ResolucionesIndividuales")
+
+  @@unique([expedienteId, orden])
+  @@unique([expedienteId, personaId])
+  @@index([estado])
+  @@map("tesistas")
+}
+
+// ============================================================================
+// RESOLUCIONES
+// ============================================================================
+model Resolucion {
+  id                      String               @id @default(uuid()) @db.Uuid
+  expedienteId            String               @db.Uuid
+  expediente              Expediente           @relation(fields: [expedienteId], references: [id])
+  tipo                    TipoResolucion
+  serie                   SerieNumeracion
+  numeroCorrelativo       Int
+  anioNumeracion          Int                  @db.SmallInt
+  numeroCompleto          String               @unique @db.VarChar(50)
+  tesistaId               String?              @db.Uuid
+  tesista                 Tesista?             @relation("ResolucionesIndividuales", fields: [tesistaId], references: [id])
+  resolucionAntecedenteId String?              @db.Uuid
+  resolucionAntecedente   Resolucion?          @relation("CadenaAntecedentes", fields: [resolucionAntecedenteId], references: [id])
+  resolucionesSucesoras   Resolucion[]         @relation("CadenaAntecedentes")
+  situacionJuridica       SituacionJuridicaRes @default(VIGENTE)
+  estadoDocumental        EstadoDocumentalRes  @default(EMITIDO)
+  origen                  OrigenResolucion     @default(SISTEMA)
+  fechaEmision            DateTime             @db.Date
+  nombreDecanoSnapshot    String               @db.VarChar(180)
+  inicialesOperador       String               @db.VarChar(10)
+  datosEspecificos        Json
+  idTramiteControl        String               @unique @db.VarChar(60)
+  versionPdf              Int                  @default(1) @db.SmallInt
+  hashVersionGenerado     String               @db.VarChar(64)
+  pdfGeneradoPath         String?
+  pdfFirmadoPath          String?
+  pdfFirmadoSha256        String?              @db.VarChar(64)
+  fechaConfirmacionFirma  DateTime?
+  usuarioEmisorId         String               @db.Uuid
+  usuarioEmisor           Usuario              @relation(fields: [usuarioEmisorId], references: [id])
+  creadoEn                DateTime             @default(now())
+  actualizadoEn           DateTime             @updatedAt
+  asientoLibroNumeracion  LibroNumeracion?
+  asientoLibroInscripcion LibroInscripcion?
+  asientoLibroTitulo      LibroTitulo?
+  resolucionesQueAnulo    DseAfectada[]        @relation("ResolucionQueAnula")
+  anuladaPorDse           DseAfectada[]        @relation("ResolucionAnulada")
+
+  @@unique([serie, anioNumeracion, numeroCorrelativo])
+  @@index([expedienteId, tipo, estadoDocumental])
+  @@map("resoluciones")
+}
+
+model DseAfectada {
+  resolucionDseId      String                @db.Uuid
+  resolucionDse        Resolucion            @relation("ResolucionQueAnula", fields: [resolucionDseId], references: [id])
+  resolucionAfectadaId String                @db.Uuid
+  resolucionAfectada   Resolucion            @relation("ResolucionAnulada", fields: [resolucionAfectadaId], references: [id])
+  estadoPrevio         SituacionJuridicaRes
+  tipoImpacto          TipoImpactoResolucion @default(DEJA_SIN_EFECTO)
+  motivo               String?
+  creadoEn             DateTime              @default(now())
+
+  @@id([resolucionDseId, resolucionAfectadaId])
+  @@map("dse_afectadas")
+}
+
+// ============================================================================
+// LIBROS OFICIALES
+// ============================================================================
+model LibroNumeracion {
+  id                   String              @id @default(uuid()) @db.Uuid
+  numeroCompleto       String              @unique @db.VarChar(50)
+  numero               Int
+  anio                 Int                 @db.SmallInt
+  serie                SerieNumeracion
+  categoria            CategoriaNumeracion
+  tipoDocumentoExterno String?             @db.VarChar(80)
+  descripcion          String
+  fechaDocumento       DateTime            @db.Date
+  registradoPorId      String              @db.Uuid
+  registradoPor        Usuario             @relation(fields: [registradoPorId], references: [id])
+  resolucionId         String?             @unique @db.Uuid
+  resolucion           Resolucion?         @relation(fields: [resolucionId], references: [id])
+  creadoEn             DateTime            @default(now())
+
+  @@unique([serie, anio, numero])
+  @@map("libro_numeracion")
+}
+
+model LibroInscripcion {
+  id                      String             @id @default(uuid()) @db.Uuid
+  escuelaProfesionalId    Int
+  escuelaProfesional      EscuelaProfesional @relation(fields: [escuelaProfesionalId], references: [id])
+  numeroAsiento           Int
+  anio                    Int                @db.SmallInt
+  numeroFolioFormateado   String             @unique @db.VarChar(40)
+  expedienteId            String             @db.Uuid
+  expediente              Expediente         @relation(fields: [expedienteId], references: [id])
+  resolucionInscripcionId String             @unique @db.Uuid
+  resolucionInscripcion   Resolucion         @relation(fields: [resolucionInscripcionId], references: [id])
+  tituloInscritoSnapshot  String
+  tesistasSnapshot        String
+  asesorSnapshot          String             @db.VarChar(200)
+  estadoAsiento           String             @default("ACTIVO") @db.VarChar(20)
+  fechaAsiento            DateTime           @db.Date
+  creadoEn                DateTime           @default(now())
+
+  @@unique([escuelaProfesionalId, anio, numeroAsiento])
+  @@map("libro_inscripcion")
+}
+
+model LibroTitulo {
+  id                    String             @id @default(uuid()) @db.Uuid
+  tesistaId             String?            @db.Uuid
+  numeroRegistro        Int
+  anioRegistro          Int                @db.SmallInt
+  expedienteId          String             @db.Uuid
+  expediente            Expediente         @relation(fields: [expedienteId], references: [id])
+  resolucionTituloId    String             @unique @db.Uuid
+  resolucionTitulo      Resolucion         @relation(fields: [resolucionTituloId], references: [id])
+  escuelaProfesionalId  Int
+  escuelaProfesional    EscuelaProfesional @relation(fields: [escuelaProfesionalId], references: [id])
+  tituladoTexto         String             @db.VarChar(250)
+  denominacionOtorgada  String             @db.VarChar(200)
+  fechaSustentacion     DateTime?          @db.Date
+  notaNumero            Int?               @db.SmallInt
+  notaCalificativo      String?            @db.VarChar(80)
+  informeConformidadSA  String?            @db.VarChar(100)
+  estado                String             @default("VIGENTE") @db.VarChar(20)
+  creadoEn              DateTime           @default(now())
+
+  @@unique([escuelaProfesionalId, anioRegistro, numeroRegistro])
+  @@map("libro_titulo")
+}
+
+// ============================================================================
+// AUDITORÍA
+// ============================================================================
+model RegistroAuditoria {
+  id               BigInt   @id @default(autoincrement())
+  usuarioId        String   @db.Uuid
+  usuario          Usuario  @relation(fields: [usuarioId], references: [id])
+  inicialesUsuario String   @db.VarChar(10)
+  accion           String   @db.VarChar(50)
+  entidad          String   @db.VarChar(60)
+  entidadId        String?  @db.VarChar(80)
+  expedienteId     String?  @db.Uuid
+  resolucionId     String?  @db.Uuid
+  detalle          Json
+  fechaHora        DateTime @default(now())
+
+  @@map("registro_auditoria")
+}
