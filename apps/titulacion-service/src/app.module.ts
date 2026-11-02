@@ -4,6 +4,7 @@ import { AuthModule } from './auth/auth.module';
 import { CatalogosModule } from './catalogos/catalogos.module';
 import { LoggerMiddleware } from './common/middleware/logger.middleware';
 import { ConfiguracionModule } from './configuracion/configuracion.module';
+import { ExpedientesModule } from './expedientes/expedientes.module'; // <-- NUEVO
 import { PersonasModule } from './personas/personas.module';
 import { PrismaModule } from './prisma/prisma.module';
 
@@ -14,6 +15,7 @@ import { PrismaModule } from './prisma/prisma.module';
     PersonasModule,
     ConfiguracionModule,
     CatalogosModule,
+    ExpedientesModule, // <-- NUEVO
   ],
 })
 export class AppModule implements NestModule {
