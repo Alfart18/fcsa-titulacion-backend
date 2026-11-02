@@ -326,8 +326,8 @@ model Tesista {
 // ============================================================================
 model Resolucion {
   id                      String               @id @default(uuid()) @db.Uuid
-  expedienteId            String               @db.Uuid
-  expediente              Expediente           @relation(fields: [expedienteId], references: [id])
+  expedienteId            String?              @db.Uuid
+  expediente              Expediente?          @relation(fields: [expedienteId], references: [id])
   tipo                    TipoResolucion
   serie                   SerieNumeracion
   numeroCorrelativo       Int
@@ -467,4 +467,40 @@ model RegistroAuditoria {
   fechaHora        DateTime @default(now())
 
   @@map("registro_auditoria")
+}
+
+// ============================================================================
+// PLANTILLAS DE RESOLUCIÓN (FASE 5)
+// ============================================================================
+model PlantillaResolucion {
+  id                 String                         @id @default(uuid()) @db.Uuid
+  tipo               TipoResolucion                 @unique
+  nombre             String                         @db.VarChar(150)
+  seriePorDefecto    SerieNumeracion                @default(ORD)
+  asuntoPlantilla    String                         @db.VarChar(300)
+  cuerpoHtml         String                         @db.Text
+  variablesEsquema   Json                           @default("[]")
+  versionActual      Int                            @default(1) @db.SmallInt
+  activa             Boolean                        @default(true)
+  actualizadoPorId   String?                        @db.Uuid
+  creadoEn           DateTime                       @default(now())
+  actualizadoEn      DateTime                       @updatedAt
+  historialVersiones PlantillaResolucionHistorial[]
+
+  @@map("plantillas_resolucion")
+}
+
+model PlantillaResolucionHistorial {
+  id              String              @id @default(uuid()) @db.Uuid
+  plantillaId     String              @db.Uuid
+  plantilla       PlantillaResolucion @relation(fields: [plantillaId], references: [id], onDelete: Cascade)
+  version         Int                 @db.SmallInt
+  asuntoPlantilla String              @db.VarChar(300)
+  cuerpoHtml      String              @db.Text
+  motivoCambio    String?             @db.VarChar(250)
+  modificadoPorId String?             @db.Uuid
+  fechaCambio     DateTime            @default(now())
+
+  @@unique([plantillaId, version])
+  @@map("plantillas_resolucion_historial")
 }

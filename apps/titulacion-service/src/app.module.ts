@@ -5,9 +5,11 @@ import { CatalogosModule } from './catalogos/catalogos.module';
 import { LoggerMiddleware } from './common/middleware/logger.middleware';
 import { ConfiguracionModule } from './configuracion/configuracion.module';
 import { ExpedientesModule } from './expedientes/expedientes.module';
+import { LibrosModule } from './libros/libros.module';
 import { PersonasModule } from './personas/personas.module';
+import { PlantillasModule } from './plantillas/plantillas.module';
 import { PrismaModule } from './prisma/prisma.module';
-import { ResolucionesModule } from './resoluciones/resoluciones.module'; // <-- NUEVO
+import { ResolucionesModule } from './resoluciones/resoluciones.module';
 
 @Module({
   imports: [
@@ -17,11 +19,13 @@ import { ResolucionesModule } from './resoluciones/resoluciones.module'; // <-- 
     ConfiguracionModule,
     CatalogosModule,
     ExpedientesModule,
-    ResolucionesModule, // <-- NUEVO
+    ResolucionesModule,
+    LibrosModule,       // <-- NUEVO
+    PlantillasModule,   // <-- NUEVO
   ],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(LoggerMiddleware).forRoutes('{*path}');
+    consumer.apply(LoggerMiddleware).forRoutes('{*path}'); // <-- CORREGIDO
   }
 }
