@@ -1,6 +1,7 @@
 // Ruta: src/app.module.ts
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { AuthModule } from './auth/auth.module';
+import { AuditoriaModule } from './auditoria/auditoria.module';
 import { CatalogosModule } from './catalogos/catalogos.module';
 import { LoggerMiddleware } from './common/middleware/logger.middleware';
 import { ConfiguracionModule } from './configuracion/configuracion.module';
@@ -9,6 +10,7 @@ import { LibrosModule } from './libros/libros.module';
 import { PersonasModule } from './personas/personas.module';
 import { PlantillasModule } from './plantillas/plantillas.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { ReportesModule } from './reportes/reportes.module';
 import { ResolucionesModule } from './resoluciones/resoluciones.module';
 
 @Module({
@@ -20,12 +22,14 @@ import { ResolucionesModule } from './resoluciones/resoluciones.module';
     CatalogosModule,
     ExpedientesModule,
     ResolucionesModule,
-    LibrosModule,       // <-- NUEVO
-    PlantillasModule,   // <-- NUEVO
+    LibrosModule,
+    PlantillasModule,
+    AuditoriaModule,
+    ReportesModule,
   ],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(LoggerMiddleware).forRoutes('{*path}'); // <-- CORREGIDO
+    consumer.apply(LoggerMiddleware).forRoutes('{*path}');
   }
 }
