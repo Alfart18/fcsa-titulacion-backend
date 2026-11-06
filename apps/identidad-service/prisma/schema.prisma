@@ -1,0 +1,70 @@
+// Ruta: apps/identidad-service/prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_IDENTIDAD")
+}
+
+enum RolUsuario {
+  ADMIN
+  DECANO
+  SECRETARIA_ACADEMICA
+  ADMINISTRATIVO
+}
+
+enum EstadoUsuario {
+  ACTIVO
+  DESACTIVADO
+}
+
+model Usuario {
+  id               String              @id @default(uuid()) @db.Uuid
+  nombresCompletos String              @db.VarChar(180)
+  gradoTitulo      String              @default("Dr.") @db.VarChar(50)
+  correo           String              @unique @db.VarChar(150)
+  passwordHash     String
+  iniciales        String              @db.VarChar(10)
+  rol              RolUsuario
+  estado           EstadoUsuario       @default(ACTIVO)
+  esDecanoFirmante Boolean             @default(false)
+  creadoEn         DateTime            @default(now())
+  actualizadoEn    DateTime            @updatedAt
+  auditorias       RegistroAuditoria[]
+
+  @@map("usuarios")
+}
+
+model ConfiguracionInstitucional {
+  id                Int      @id @default(autoincrement())
+  facultad          String   @default("Facultad de Ciencias de la Salud") @db.VarChar(200)
+  universidad       String   @default("Universidad Andina del Cusco") @db.VarChar(200)
+  ciudad            String   @default("Cusco") @db.VarChar(100)
+  siglasFacultad    String   @default("FCSa") @db.VarChar(20)
+  siglasUniversidad String   @default("UAC") @db.VarChar(20)
+  reglamentoMarco   String   @default("Resolución N.º 513-CU-2024-UAC") @db.VarChar(150)
+  actualizadoEn     DateTime @updatedAt
+
+  @@map("configuracion_institucional")
+}
+
+model RegistroAuditoria {
+  id               BigInt   @id @default(autoincrement())
+  usuarioId        String   @db.Uuid
+  usuario          Usuario  @relation(fields: [usuarioId], references: [id])
+  inicialesUsuario String   @db.VarChar(10)
+  accion           String   @db.VarChar(50)
+  entidad          String   @db.VarChar(60)
+  entidadId        String?  @db.VarChar(80)
+  expedienteId     String?  @db.Uuid
+  resolucionId     String?  @db.Uuid
+  detalle          Json
+  fechaHora        DateTime @default(now())
+
+  @@index([usuarioId, fechaHora])
+  @@index([accion])
+  @@map("registro_auditoria")
+}

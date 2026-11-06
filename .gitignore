@@ -65,6 +65,7 @@ pgdata_fcsa/
 
 # Prisma Generated Client (Microservicios)
 apps/titulacion-service/src/generated/
+apps/identidad-service/src/generated/   
 
 # Backups y basura
 prisma/migrations_backup_v1/

@@ -3,8 +3,8 @@
   "compilerOptions": {
     "declaration": true,
     "composite": true,
-    "outDir": "../../dist/apps/identidad-service"
+    "outDir": "../dist/apps/identidad-service"
   },
-  "include": ["src/**/*", "../../libs/**/*"],
-  "exclude": ["node_modules", "dist", "test", "**/*spec.ts"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "test", "**/*.spec.ts"]
 }
