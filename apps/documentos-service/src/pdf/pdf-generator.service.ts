@@ -32,6 +32,8 @@ interface EscalaTipografica {
   titleResSize: number;
   signatureBlockHeight: number;
   closingSpacing: number;
+  firstLineIndent: number;
+  articleLabelWidth: number;
 }
 
 export interface PdfGeneradoResult {
@@ -50,12 +52,20 @@ export class PdfGeneratorService {
     ? join(process.cwd(), process.env.PDF_FOOTER_IMAGE_PATH)
     : join(process.cwd(), 'apps', 'documentos-service', 'assets', 'footer.jpg');
 
+  private readonly fontsDirPath = join(
+    process.cwd(),
+    'apps',
+    'documentos-service',
+    'assets',
+    'fonts',
+  );
+
   private readonly pageWidth = 595.28;
   private readonly pageHeight = 841.89;
-  private readonly marginLeft = 65;
-  private readonly marginRight = 65;
-  private readonly marginTop = 0; // <-- Ajustado para eliminar el espacio en blanco superior
-  private readonly marginBottom = 75;
+  private readonly marginLeft = 62;
+  private readonly marginRight = 58;
+  private readonly marginTop = 0;
+  private readonly marginBottom = 68;
   private readonly contentWidth =
     this.pageWidth - this.marginLeft - this.marginRight;
 
@@ -67,7 +77,12 @@ export class PdfGeneratorService {
     if (!fs.existsSync(ruta)) return null;
     const bytes = fs.readFileSync(ruta);
     if (bytes.length < 4) return null;
-    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    if (
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47
+    ) {
       return await pdfDoc.embedPng(bytes);
     }
     if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
@@ -76,18 +91,108 @@ export class PdfGeneratorService {
     return null;
   }
 
+    private async cargarFuentesDocumento(pdfDoc: PDFDocument): Promise<{
+    fontRegular: PDFFont;
+    fontBold: PDFFont;
+    fontItalic: PDFFont;
+    fontBoldItalic: PDFFont;
+    fontFooter: PDFFont;
+  }> {
+    const calibriRegPath = join(this.fontsDirPath, 'calibri.ttf');
+    const calibriBoldPath = join(this.fontsDirPath, 'calibrib.ttf');
+    const calibriItalicPath = join(this.fontsDirPath, 'calibrii.ttf');
+    const calibriBoldItalicPath = join(this.fontsDirPath, 'calibriz.ttf');
+
+    if (
+      fs.existsSync(calibriRegPath) &&
+      fs.existsSync(calibriBoldPath) &&
+      fs.existsSync(calibriItalicPath)
+    ) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fontkit = require('@pdf-lib/fontkit');
+        pdfDoc.registerFontkit(fontkit);
+
+        const fontRegular = await pdfDoc.embedFont(
+          fs.readFileSync(calibriRegPath),
+        );
+        const fontBold = await pdfDoc.embedFont(
+          fs.readFileSync(calibriBoldPath),
+        );
+        const fontItalic = await pdfDoc.embedFont(
+          fs.readFileSync(calibriItalicPath),
+        );
+        const fontBoldItalic = fs.existsSync(calibriBoldItalicPath)
+          ? await pdfDoc.embedFont(fs.readFileSync(calibriBoldItalicPath))
+          : fontBold;
+
+        return {
+          fontRegular,
+          fontBold,
+          fontItalic,
+          fontBoldItalic,
+          fontFooter: fontRegular,
+        };
+      } catch (error: any) {
+        console.warn(
+          '⚠️ No se pudo cargar Calibri (fontkit). Usando Helvetica como respaldo.',
+          error.message,
+        );
+      }
+    }
+
+    const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const fontItalic = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+    const fontBoldItalic = await pdfDoc.embedFont(
+      StandardFonts.HelveticaBoldOblique,
+    );
+
+    return {
+      fontRegular,
+      fontBold,
+      fontItalic,
+      fontBoldItalic,
+      fontFooter: fontRegular,
+    };
+  }
+
   private construirEscala(bodySize: number): EscalaTipografica {
-    const ratio = bodySize / 11;
+    const ratio = bodySize / 10;
     return {
       bodySize,
-      lineHeight: Number((bodySize * 1.38).toFixed(2)),
-      paragraphSpacing: Math.max(5, Math.round(10 * ratio)),
-      headerUniSize: Number((14 * ratio).toFixed(2)),
-      headerFacSize: Number((11.5 * ratio).toFixed(2)),
-      titleResSize: Number((12 * ratio).toFixed(2)),
-      signatureBlockHeight: Math.round(75 * ratio),
-      closingSpacing: Math.max(18, Math.round(38 * ratio)),
+      lineHeight: Number((bodySize * 1.22).toFixed(2)),
+      paragraphSpacing: Math.max(4, Math.round(6 * ratio)),
+      headerUniSize: Number((12 * ratio).toFixed(2)),
+      headerFacSize: Number((11 * ratio).toFixed(2)),
+      titleResSize: Number((11 * ratio).toFixed(2)),
+      signatureBlockHeight: Math.round(65 * ratio),
+      closingSpacing: Math.max(12, Math.round(18 * ratio)),
+      firstLineIndent: Math.round(35 * ratio),
+      articleLabelWidth: Math.round(78 * ratio),
     };
+  }
+
+  private parsearTextoConFormato(
+    texto: string,
+    cursivaBase = false,
+  ): SegmentoTexto[] {
+    if (!texto) return [];
+    const partes = texto.split(/(\*\*.*?\*\*)/g).filter(Boolean);
+    return partes.map((parte) => {
+      if (parte.startsWith('**') && parte.endsWith('**')) {
+        return {
+          texto: parte.slice(2, -2),
+          negrita: true,
+          cursiva: cursivaBase,
+        };
+      }
+      return {
+        texto: parte,
+        negrita: false,
+        cursiva: cursivaBase,
+      };
+    });
   }
 
   private envolverSegmentosEnLineas(
@@ -96,11 +201,17 @@ export class PdfGeneratorService {
     fontRegular: PDFFont,
     fontBold: PDFFont,
     fontItalic: PDFFont,
+    anchoMaximoBloque: number,
+    sangriaPrimeraLinea = 0,
   ): PalabraToken[][][] {
     const bloquesDeLinea: PalabraToken[][] = [[]];
 
     for (const seg of segmentos) {
-      const font = seg.negrita ? fontBold : seg.cursiva ? fontItalic : fontRegular;
+      const font = seg.negrita
+        ? fontBold
+        : seg.cursiva
+          ? fontItalic
+          : fontRegular;
       const limpio = this.templatesService.sanitizarTextoWinAnsi(seg.texto);
       const subLineas = limpio.split('\n');
 
@@ -131,9 +242,20 @@ export class PdfGeneratorService {
       let anchoAcumulado = 0;
 
       for (const token of bloquePalabras) {
-        const espacioNecesario = lineaActual.length === 0 ? token.ancho : anchoEspacioBase + token.ancho;
+        const esPrimeraLinea = lineasEnvueltas.length === 0;
+        const limiteAnchoActual = esPrimeraLinea
+          ? anchoMaximoBloque - sangriaPrimeraLinea
+          : anchoMaximoBloque;
 
-        if (anchoAcumulado + espacioNecesario <= this.contentWidth || lineaActual.length === 0) {
+        const espacioNecesario =
+          lineaActual.length === 0
+            ? token.ancho
+            : anchoEspacioBase + token.ancho;
+
+        if (
+          anchoAcumulado + espacioNecesario <= limiteAnchoActual ||
+          lineaActual.length === 0
+        ) {
           lineaActual.push(token);
           anchoAcumulado += espacioNecesario;
         } else {
@@ -156,23 +278,47 @@ export class PdfGeneratorService {
     nombreDecanoVigente?: string | null;
     inicialesDecanoVigente?: string | null;
   }): Promise<PdfGeneradoResult> {
-    const { resolucion, configuracion, nombreDecanoVigente, inicialesDecanoVigente } = params;
+    const {
+      resolucion,
+      configuracion,
+      inicialesDecanoVigente,
+    } = params;
 
-    const codigoExpediente = resolucion.expediente?.codigoExpediente || 'EXP-S/N';
-    const universidad = this.templatesService.sanitizarTextoWinAnsi((configuracion?.universidad || 'UNIVERSIDAD ANDINA DEL CUSCO').toUpperCase());
-    const facultad = this.templatesService.sanitizarTextoWinAnsi((configuracion?.facultad || 'FACULTAD DE CIENCIAS DE LA SALUD').toUpperCase());
-    const ciudad = this.templatesService.sanitizarTextoWinAnsi(configuracion?.ciudad || 'Cusco');
+    const codigoExpediente =
+      resolucion.expediente?.codigoExpediente || 'EXP-S/N';
+    const universidad = this.templatesService.sanitizarTextoWinAnsi(
+      (
+        configuracion?.universidad || 'UNIVERSIDAD ANDINA DEL CUSCO'
+      ).toUpperCase(),
+    );
+    const facultad = this.templatesService.sanitizarTextoWinAnsi(
+      (
+        configuracion?.facultad || 'FACULTAD DE CIENCIAS DE LA SALUD'
+      ).toUpperCase(),
+    );
+    const ciudad = this.templatesService.sanitizarTextoWinAnsi(
+      configuracion?.ciudad || 'Cusco',
+    );
 
-    const datosEspecificos = (resolucion.datosEspecificos as Record<string, any>) || {};
-    const secciones = this.templatesService.construirSeccionesJuridicas(resolucion.tipo, datosEspecificos, codigoExpediente);
+    const datosEspecificos =
+      (resolucion.datosEspecificos as Record<string, any>) || {};
+    const secciones: SeccionesJuridicasResult =
+      this.templatesService.construirSeccionesJuridicas(
+        resolucion.tipo,
+        datosEspecificos,
+        codigoExpediente,
+      );
 
     const selloControl = `ID-TRAMITE: ${resolucion.idTramiteControl} | VER: ${resolucion.versionPdf} | HASH: ${resolucion.hashVersionGenerado}`;
 
     const pdfDoc = await PDFDocument.create();
-    const fontRegular = await pdfDoc.embedFont(StandardFonts.TimesRoman);
-    const fontBold = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
-    const fontItalic = await pdfDoc.embedFont(StandardFonts.TimesRomanItalic);
-    const fontFooter = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const {
+      fontRegular,
+      fontBold,
+      fontItalic,
+      fontBoldItalic,
+      fontFooter,
+    } = await this.cargarFuentesDocumento(pdfDoc);
 
     let headerImage: any = null;
     let headerImageHeight = 0;
@@ -183,13 +329,14 @@ export class PdfGeneratorService {
         const imgWidth = this.pageWidth;
         headerImageHeight = (imgDims.height / imgDims.width) * imgWidth;
       }
-    } catch (error) {
-      console.error('❌ Error al cargar la imagen del encabezado:', error.message);
+    } catch (error: any) {
+      console.error(
+        '❌ Error al cargar la imagen del encabezado:',
+        error.message,
+      );
     }
 
-    // Forzamos la fuente a 11pt para que se vea igual que en Word.
-    // El texto pasará a la página 2 automáticamente si es necesario.
-    const escalaSeleccionada = this.construirEscala(11);
+    const escala = this.construirEscala(9.8);
 
     const paginas: PDFPage[] = [];
     let paginaActual = pdfDoc.addPage([this.pageWidth, this.pageHeight]);
@@ -200,61 +347,183 @@ export class PdfGeneratorService {
       if (cursorY - altoRequerido < this.marginBottom) {
         paginaActual = pdfDoc.addPage([this.pageWidth, this.pageHeight]);
         paginas.push(paginaActual);
-        cursorY = this.pageHeight - this.marginTop;
+        cursorY = this.pageHeight - 45;
       }
     };
 
-    const dibujarTextoCentrado = (texto: string, font: PDFFont, size: number, espacioInferior: number, subrayado = false) => {
-      const textoLimpio = this.templatesService.sanitizarTextoWinAnsi(texto);
+      const dibujarTextoCentrado = (
+      texto: string,
+      font: PDFFont,
+      size: number,
+      espacioInferior: number,
+      subrayado = false,
+      color: any = rgb(0.05, 0.05, 0.05), // <-- NUEVO PARÁMETRO DE COLOR
+    ) => {
+      const textoLimpio = this.templatesService
+        .sanitizarTextoWinAnsi(texto)
+        .replace(/\s+/g, ' ')
+        .trim();
       verificarEspacioOSaltarPagina(size + espacioInferior);
       const textWidth = font.widthOfTextAtSize(textoLimpio, size);
       const x = this.marginLeft + (this.contentWidth - textWidth) / 2;
 
-      paginaActual.drawText(textoLimpio, { x, y: cursorY, size, font, color: rgb(0.05, 0.05, 0.05) });
+      paginaActual.drawText(textoLimpio, {
+        x,
+        y: cursorY,
+        size,
+        font,
+        color, // <-- Usamos el color aquí
+      });
       if (subrayado) {
-        paginaActual.drawLine({ start: { x, y: cursorY - 2 }, end: { x: x + textWidth, y: cursorY - 2 }, thickness: 0.8, color: rgb(0.05, 0.05, 0.05) });
+        paginaActual.drawLine({
+          start: { x, y: cursorY - 1.8 },
+          end: { x: x + textWidth, y: cursorY - 1.8 },
+          thickness: 0.75,
+          color: color, // <-- El subrayado también toma el color
+        });
       }
       cursorY -= size + espacioInferior;
     };
 
-    const dibujarTextoIzquierda = (texto: string, font: PDFFont, size: number, espacioInferior: number) => {
-      const textoLimpio = this.templatesService.sanitizarTextoWinAnsi(texto);
+    const dibujarTextoIzquierda = (
+      texto: string,
+      font: PDFFont,
+      size: number,
+      espacioInferior: number,
+    ) => {
+      const textoLimpio = this.templatesService
+        .sanitizarTextoWinAnsi(texto)
+        .replace(/\s+/g, ' ')
+        .trim();
       verificarEspacioOSaltarPagina(size + espacioInferior);
-      paginaActual.drawText(textoLimpio, { x: this.marginLeft, y: cursorY, size, font, color: rgb(0.05, 0.05, 0.05) });
+      paginaActual.drawText(textoLimpio, {
+        x: this.marginLeft,
+        y: cursorY,
+        size,
+        font,
+        color: rgb(0.05, 0.05, 0.05),
+      });
       cursorY -= size + espacioInferior;
     };
 
-    const dibujarTextoDerecha = (texto: string, font: PDFFont, size: number, espacioInferior: number) => {
-      const textoLimpio = this.templatesService.sanitizarTextoWinAnsi(texto);
+    const dibujarTextoDerecha = (
+      texto: string,
+      font: PDFFont,
+      size: number,
+      espacioInferior: number,
+    ) => {
+      const textoLimpio = this.templatesService
+        .sanitizarTextoWinAnsi(texto)
+        .replace(/\s+/g, ' ')
+        .trim();
       verificarEspacioOSaltarPagina(size + espacioInferior);
       const textWidth = font.widthOfTextAtSize(textoLimpio, size);
       const x = this.pageWidth - this.marginRight - textWidth;
-      paginaActual.drawText(textoLimpio, { x, y: cursorY, size, font, color: rgb(0.05, 0.05, 0.05) });
+      paginaActual.drawText(textoLimpio, {
+        x,
+        y: cursorY,
+        size,
+        font,
+        color: rgb(0.05, 0.05, 0.05),
+      });
       cursorY -= size + espacioInferior;
     };
 
-    const dibujarParrafoCompuesto = (segmentos: SegmentoTexto[], size = escalaSeleccionada.bodySize, lineHeight = escalaSeleccionada.lineHeight, espacioInferior = escalaSeleccionada.paragraphSpacing, justificar = true) => {
-      const bloquesEnvueltos = this.envolverSegmentosEnLineas(segmentos, size, fontRegular, fontBold, fontItalic);
+    const dibujarParrafoCompuesto = (
+      segmentos: SegmentoTexto[],
+      opciones?: {
+        size?: number;
+        lineHeight?: number;
+        espacioInferior?: number;
+        justificar?: boolean;
+        sangriaPrimeraLinea?: number;
+        offsetIzquierdo?: number;
+        etiquetaColumnaIzquierda?: string;
+      },
+    ) => {
+      const size = opciones?.size ?? escala.bodySize;
+      const lineHeight = opciones?.lineHeight ?? escala.lineHeight;
+      const espacioInferior =
+        opciones?.espacioInferior ?? escala.paragraphSpacing;
+      const justificar = opciones?.justificar ?? true;
+      const sangriaPrimeraLinea = opciones?.sangriaPrimeraLinea ?? 0;
+      const offsetIzquierdo = opciones?.offsetIzquierdo ?? 0;
+      const etiquetaIzquierda = opciones?.etiquetaColumnaIzquierda;
+
+      const anchoDisponibleBloque = this.contentWidth - offsetIzquierdo;
+      const bloquesEnvueltos = this.envolverSegmentosEnLineas(
+        segmentos,
+        size,
+        fontRegular,
+        fontBold,
+        fontItalic,
+        anchoDisponibleBloque,
+        sangriaPrimeraLinea,
+      );
       const anchoEspacioBase = fontRegular.widthOfTextAtSize(' ', size);
 
+      let etiquetaDibujada = false;
+
       for (const lineasEnvueltas of bloquesEnvueltos) {
-        if (lineasEnvueltas.length === 0) { cursorY -= lineHeight * 0.5; continue; }
+        if (lineasEnvueltas.length === 0) {
+          cursorY -= lineHeight * 0.5;
+          continue;
+        }
 
         lineasEnvueltas.forEach((linea, idxLinea) => {
           verificarEspacioOSaltarPagina(lineHeight);
-          const esUltimaLineaDelBloque = idxLinea === lineasEnvueltas.length - 1;
+
+                    if (etiquetaIzquierda && !etiquetaDibujada && idxLinea === 0) {
+            const etiquetaLimpia =
+              this.templatesService.sanitizarTextoWinAnsi(etiquetaIzquierda);
+            paginaActual.drawText(etiquetaLimpia, {
+              x: this.marginLeft,
+              y: cursorY,
+              size,
+              font: fontBold,
+              color: rgb(0.05, 0.05, 0.05),
+            });
+
+            // SUBRAYADO PARA PRIMERO, SEGUNDO, TERCERO...
+            const labelWidth = fontBold.widthOfTextAtSize(etiquetaLimpia, size);
+            paginaActual.drawLine({
+              start: { x: this.marginLeft, y: cursorY - 1.5 },
+              end: { x: this.marginLeft + labelWidth, y: cursorY - 1.5 },
+              thickness: 0.75,
+              color: rgb(0.05, 0.05, 0.05),
+            });
+
+            etiquetaDibujada = true;
+          }
+
+          const esPrimeraLineaDelBloque = idxLinea === 0;
+          const esUltimaLineaDelBloque =
+            idxLinea === lineasEnvueltas.length - 1;
+          const sangriaLineaActual = esPrimeraLineaDelBloque
+            ? sangriaPrimeraLinea
+            : 0;
+          const anchoLineaMax = anchoDisponibleBloque - sangriaLineaActual;
+
           const totalAnchoPalabras = linea.reduce((acc, t) => acc + t.ancho, 0);
           let espacioEntrePalabras = anchoEspacioBase;
 
           if (justificar && !esUltimaLineaDelBloque && linea.length > 1) {
-            const espacioDisponible = this.contentWidth - totalAnchoPalabras;
+            const espacioDisponible = anchoLineaMax - totalAnchoPalabras;
             const espacioCalculado = espacioDisponible / (linea.length - 1);
-            if (espacioCalculado < anchoEspacioBase * 3.5) espacioEntrePalabras = espacioCalculado;
+            if (espacioCalculado < anchoEspacioBase * 3.5) {
+              espacioEntrePalabras = espacioCalculado;
+            }
           }
 
-          let x = this.marginLeft;
+          let x = this.marginLeft + offsetIzquierdo + sangriaLineaActual;
           for (const token of linea) {
-            paginaActual.drawText(token.palabra, { x, y: cursorY, size, font: token.font, color: rgb(0.05, 0.05, 0.05) });
+            paginaActual.drawText(token.palabra, {
+              x,
+              y: cursorY,
+              size,
+              font: token.font,
+              color: rgb(0.05, 0.05, 0.05),
+            });
             x += token.ancho + espacioEntrePalabras;
           }
           cursorY -= lineHeight;
@@ -263,7 +532,7 @@ export class PdfGeneratorService {
       cursorY -= espacioInferior;
     };
 
-    // DIBUJAR ENCABEZADO
+        // 1. DIBUJAR ENCABEZADO Y SIEMPRE IMPRIMIR FACULTAD DEBAJO
     if (headerImage) {
       paginaActual.drawImage(headerImage, {
         x: 0,
@@ -271,99 +540,206 @@ export class PdfGeneratorService {
         width: this.pageWidth,
         height: headerImageHeight,
       });
-      cursorY -= headerImageHeight + 5;
+      cursorY -= headerImageHeight + 12;
     } else {
-      dibujarTextoCentrado(universidad, fontBold, escalaSeleccionada.headerUniSize, 4);
-      dibujarTextoCentrado(facultad, fontBold, escalaSeleccionada.headerFacSize, 10);
+      dibujarTextoCentrado(universidad, fontBold, escala.headerUniSize, 4);
     }
 
-    // Título y fecha
-    const ratio = escalaSeleccionada.bodySize / 11;
-    // Título adaptado al formato oficial: RESOLUCIÓN Nº 4184 - 2026 - FCSa - UAC
+    // AQUÍ ESTÁ EL CAMBIO: Le sumamos +2 al tamaño, color celeste y sin subrayado (false)
     dibujarTextoCentrado(
-      `RESOLUCIÓN Nº ${resolucion.numeroCorrelativo} - ${resolucion.anioNumeracion} - FCSa - UAC`,
+      facultad,
       fontBold,
-      escalaSeleccionada.titleResSize,
-      Math.round(15 * ratio),
-      true,
+      escala.headerFacSize + 3.5,
+      8,
+      false,
+      rgb(0.1, 0.45, 0.75),
     );
-    dibujarTextoDerecha(`${ciudad}, ${this.templatesService.formatearFechaLargaCastellano(resolucion.fechaEmision)}`, fontRegular, escalaSeleccionada.bodySize, Math.round(15 * ratio));
 
-    // Línea oficial EL DECANO...
-    dibujarTextoCentrado('EL DECANO DE LA FACULTAD DE CIENCIAS DE LA SALUD DE LA UNIVERSIDAD ANDINA DEL CUSCO:', fontBold, escalaSeleccionada.bodySize, Math.round(15 * ratio));
+    // 2. TÍTULO DE LA RESOLUCIÓN (CON SUBRAYADO Y MÁS GRANDE) Y FECHA
+    const serieTexto = resolucion.serie === SerieNumeracion.CF ? ' - CF' : '';
+    const tituloResolucionTexto = `RESOLUCIÓN Nº ${resolucion.numeroCorrelativo} - ${resolucion.anioNumeracion}${serieTexto} - FCSa - UAC`;
+    
+    dibujarTextoCentrado(
+      tituloResolucionTexto,
+      fontBold,
+      escala.titleResSize + 4,
+      10,
+      true, // Subrayado en true
+    );
 
-    // VISTO
-    dibujarTextoIzquierda('VISTO:', fontBold, escalaSeleccionada.bodySize, 4);
-    dibujarParrafoCompuesto([{ texto: secciones.visto }]);
+    // Fecha en Negrita y más grande
+    dibujarTextoDerecha(
+      `${ciudad}, ${this.templatesService.formatearFechaLargaCastellano(resolucion.fechaEmision)}`,
+      fontBold,
+      escala.bodySize + 1.5, // <-- AUMENTADO
+      10,
+    );
 
-    // CONSIDERANDO
-    dibujarTextoIzquierda('CONSIDERANDO:', fontBold, escalaSeleccionada.bodySize, 4);
+    // Línea de autoridad (EL DECANO...) más grande
+    dibujarTextoIzquierda(
+      'EL DECANO DE LA FACULTAD DE CIENCIAS DE LA SALUD DE LA UNIVERSIDAD ANDINA DEL CUSCO:',
+      fontBold,
+      escala.bodySize + 1.5, // <-- AUMENTADO
+      10,
+    );
+
+    // FUNCIÓN AUXILIAR PARA DIBUJAR TÍTULOS DE SECCIÓN
+    const dibujarTituloSeccion = (texto: string) => {
+      const textoLimpio = this.templatesService.sanitizarTextoWinAnsi(texto);
+      const fontSize = escala.bodySize + 1.5; // <-- AUMENTADO AQUÍ
+      
+      verificarEspacioOSaltarPagina(fontSize + 4);
+      const x = this.marginLeft + escala.firstLineIndent; 
+      const textWidth = fontBold.widthOfTextAtSize(textoLimpio, fontSize);
+
+      paginaActual.drawText(textoLimpio, {
+        x,
+        y: cursorY,
+        size: fontSize,
+        font: fontBold,
+        color: rgb(0.05, 0.05, 0.05),
+      });
+
+      paginaActual.drawLine({
+        start: { x, y: cursorY - 1.5 },
+        end: { x: x + textWidth, y: cursorY - 1.5 },
+        thickness: 0.75,
+        color: rgb(0.05, 0.05, 0.05),
+      });
+
+      cursorY -= fontSize + 4;
+    };
+
+    // 4. SECCIÓN VISTO
+    dibujarTituloSeccion('VISTO:');
+    dibujarParrafoCompuesto(this.parsearTextoConFormato(secciones.visto), {
+      sangriaPrimeraLinea: escala.firstLineIndent,
+    });
+
+    cursorY -= 8; // <-- ESPACIO EXTRA ANTES DE CONSIDERANDO
+
+    // 5. SECCIÓN CONSIDERANDO
+    dibujarTituloSeccion('CONSIDERANDO:');
     for (const parrafo of secciones.considerando) {
-      dibujarParrafoCompuesto([{ texto: parrafo }]);
+      dibujarParrafoCompuesto(this.parsearTextoConFormato(parrafo), {
+        sangriaPrimeraLinea: escala.firstLineIndent,
+      });
     }
 
-    // SE RESUELVE (cambiado a RESUELVE:)
-    dibujarTextoIzquierda('RESUELVE:', fontBold, escalaSeleccionada.bodySize, 4);
+    cursorY -= 8; // <-- ESPACIO EXTRA ANTES DE RESUELVE
+
+    // 6. SECCIÓN RESUELVE
+    dibujarTituloSeccion('RESUELVE:');
     for (const art of secciones.articulosResolutivos) {
-      dibujarParrafoCompuesto([{ texto: `${art.titulo} `, negrita: true }, { texto: art.texto }]);
+      dibujarParrafoCompuesto(this.parsearTextoConFormato(art.texto), {
+        offsetIzquierdo: escala.articleLabelWidth,
+        etiquetaColumnaIzquierda: art.titulo,
+      });
     }
 
-    cursorY -= 6;
-    dibujarParrafoCompuesto([{ texto: 'Regístrese, comuníquese y archívese.', cursiva: true }], escalaSeleccionada.bodySize, escalaSeleccionada.lineHeight, escalaSeleccionada.closingSpacing, false);
+    // 7. CIERRE Y BLOQUE DE DISTRIBUCIÓN (ESTILO IMAGEN)
+    verificarEspacioOSaltarPagina(escala.signatureBlockHeight);
+    cursorY -= 15; // Espacio de separación antes del cierre
 
-    // FIRMA
-    verificarEspacioOSaltarPagina(escalaSeleccionada.signatureBlockHeight);
-    cursorY -= Math.round(15 * ratio);
+    // A) "Regístrese, Comuníquese y Archívese." con línea punteada
+    const textoRegistrese = 'Regístrese, Comuníquese y Archívese. ';
+    paginaActual.drawText(this.templatesService.sanitizarTextoWinAnsi(textoRegistrese), {
+      x: this.marginLeft,
+      y: cursorY,
+      size: escala.bodySize + 1,
+      font: fontBoldItalic,
+      color: rgb(0.05, 0.05, 0.05),
+    });
 
-    const nombreFirmanteFinal = (resolucion.nombreDecanoSnapshot || nombreDecanoVigente || 'DECANO DE LA FACULTAD DE CIENCIAS DE LA SALUD').toUpperCase();
-    const inicialesDecano = inicialesDecanoVigente || 'JAAFD';
+    const anchoTexto = fontBoldItalic.widthOfTextAtSize(textoRegistrese, escala.bodySize + 1);
+    // Línea de guiones al lado
+    paginaActual.drawText('. '.repeat(40), {
+      x: this.marginLeft + anchoTexto,
+      y: cursorY,
+      size: escala.bodySize + 1,
+      font: fontBoldItalic,
+      color: rgb(0.05, 0.05, 0.05),
+    });
 
-    dibujarTextoCentrado('Firmado digitalmente por:', fontItalic, Number((10 * ratio).toFixed(2)), 4);
-    dibujarTextoCentrado(nombreFirmanteFinal, fontBold, escalaSeleccionada.bodySize, 2);
-    dibujarTextoCentrado(`DECANO(A) DE LA ${facultad}`, fontRegular, Number((9.5 * ratio).toFixed(2)), 12);
-    dibujarTextoCentrado(`Iniciales: ${resolucion.inicialesOperador} / ${inicialesDecano}`, fontFooter, 8.5, 10);
+    // B) Bloque de distribución justo debajo
+    cursorY -= 14; 
+    const inicialesDecano = (inicialesDecanoVigente || 'JAAFD').toUpperCase();
+    const inicialesOperador = (resolucion.inicialesOperador || 'avc').toLowerCase();
 
-    // PIE DE PÁGINA Y SELLO
-    const totalPaginas = paginas.length;
-    const selloInvisibleLimpio = this.templatesService.sanitizarTextoWinAnsi(selloControl);
+    const lineasDistribucion = [
+      `FCSa/${inicialesDecano}/${inicialesOperador}`,
+      'Interesado (a)',
+      'Jurados',
+      'Asesor (a)',
+      'Expediente (1)',
+      'Archivo (1).',
+    ];
 
-    for (const [idx, pag] of paginas.entries()) {
-      let footerImage: any = null;
-      let footerImageHeight = 0;
+    for (const lineaDist of lineasDistribucion) {
+      paginaActual.drawText(
+        this.templatesService.sanitizarTextoWinAnsi(lineaDist),
+        {
+          x: this.marginLeft,
+          y: cursorY,
+          size: 8.5, // Un poco más grande
+          font: fontBold, // En negrita
+          color: rgb(0.05, 0.05, 0.05),
+        },
+      );
+      cursorY -= 10; // Interlineado
+    }
+
+    // 9. PIE DE PÁGINA INSTITUCIONAL Y SELLO 100% INVISIBLE EN (0,0)
+    const selloInvisibleLimpio =
+      this.templatesService.sanitizarTextoWinAnsi(selloControl);
+
+    for (const pag of paginas) {
       try {
-        footerImage = await this.cargarImagen(pdfDoc, this.footerImagePath);
+        const footerImage = await this.cargarImagen(
+          pdfDoc,
+          this.footerImagePath,
+        );
         if (footerImage) {
           const imgDims = footerImage.scale(1);
           const imgWidth = this.pageWidth;
-          footerImageHeight = (imgDims.height / imgDims.width) * imgWidth;
-          pag.drawImage(footerImage, { x: 0, y: 0, width: imgWidth, height: footerImageHeight });
+          const footerImageHeight = (imgDims.height / imgDims.width) * imgWidth;
+          pag.drawImage(footerImage, {
+            x: 0,
+            y: 0,
+            width: imgWidth,
+            height: footerImageHeight,
+          });
         }
-      } catch (error) {
-        console.error('❌ Error al cargar la imagen del pie de página:', error.message);
+      } catch (error: any) {
+        console.error(
+          '❌ Error al cargar la imagen del pie de página:',
+          error.message,
+        );
       }
 
-      pag.drawText(selloInvisibleLimpio, { x: 0, y: 0, size: 0.1, font: fontFooter, color: rgb(1, 1, 1) });
-
-      const yFooter = footerImageHeight > 0 ? footerImageHeight + 5 : 35;
-
-      if (footerImageHeight === 0) {
-        pag.drawLine({ start: { x: this.marginLeft, y: yFooter + 10 }, end: { x: this.pageWidth - this.marginRight, y: yFooter + 10 }, thickness: 0.4, color: rgb(0.7, 0.75, 0.8) });
-      }
-
-      const textoIzquierda = this.templatesService.sanitizarTextoWinAnsi(`/${resolucion.inicialesOperador} | ${selloControl}`);
-      pag.drawText(textoIzquierda, { x: this.marginLeft, y: yFooter, size: 7.5, font: fontFooter, color: rgb(0.3, 0.35, 0.4) });
-
-      const textoDerecha = `Pag. ${idx + 1} de ${totalPaginas}`;
-      const anchoDer = fontFooter.widthOfTextAtSize(textoDerecha, 7.5);
-      pag.drawText(textoDerecha, { x: this.pageWidth - this.marginRight - anchoDer, y: yFooter, size: 7.5, font: fontFooter, color: rgb(0.3, 0.35, 0.4) });
+      pag.drawText(selloInvisibleLimpio, {
+        x: 0,
+        y: 0,
+        size: 0.1,
+        font: fontFooter,
+        color: rgb(1, 1, 1),
+      });
     }
 
-    // METADATOS
-    pdfDoc.setTitle(`RESOLUCIÓN Nº ${resolucion.numeroCorrelativo} - ${resolucion.anioNumeracion} - FCSa - UAC`);
+    // 10. METADATOS INTERNOS DEL DICCIONARIO PDF
+    pdfDoc.setTitle(tituloResolucionTexto);
     pdfDoc.setAuthor(`${universidad} - ${facultad}`);
     pdfDoc.setSubject(selloControl);
-    pdfDoc.setKeywords(['FCSa-UAC', resolucion.idTramiteControl, `VER-${resolucion.versionPdf}`, `HASH-${resolucion.hashVersionGenerado}`, resolucion.numeroCompleto]);
-    pdfDoc.setProducer('Sistema de Resoluciones de Titulacion FCSa-UAC (NestJS + pdf-lib)');
+    pdfDoc.setKeywords([
+      'FCSa-UAC',
+      resolucion.idTramiteControl,
+      `VER-${resolucion.versionPdf}`,
+      `HASH-${resolucion.hashVersionGenerado}`,
+      resolucion.numeroCompleto,
+    ]);
+    pdfDoc.setProducer(
+      'Sistema de Resoluciones de Titulacion FCSa-UAC (NestJS + pdf-lib)',
+    );
     pdfDoc.setCreationDate(new Date());
 
     const pdfBytes = await pdfDoc.save();
@@ -373,7 +749,11 @@ export class PdfGeneratorService {
     return { buffer: bufferFinal, nombreArchivo, selloControl };
   }
 
-  async extraerMetadatosBuffer(buffer: Buffer, nombreArchivo: string, selloControl: string) {
+  async extraerMetadatosBuffer(
+    buffer: Buffer,
+    nombreArchivo: string,
+    selloControl: string,
+  ) {
     const pdfDoc = await PDFDocument.load(buffer);
     return {
       nombreArchivo,
