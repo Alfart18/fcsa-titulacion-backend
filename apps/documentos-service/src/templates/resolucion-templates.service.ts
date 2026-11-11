@@ -86,7 +86,12 @@ export class ResolucionTemplatesService {
       .replace(/[‘’]/g, "'")
       .replace(/[—–]/g, '-')
       .replace(/•/g, '-')
-      .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, '');
+      // 1. Reemplaza todos los tipos de espacios invisibles que existen en Unicode
+      .replace(/[\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/g, ' ') 
+      // 2. Elimina caracteres extraños
+      .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, '') 
+      // 3. Convierte múltiples espacios en un solo espacio normal
+      .replace(/\s+/g, ' ');
   }
 
   construirSeccionesJuridicas(

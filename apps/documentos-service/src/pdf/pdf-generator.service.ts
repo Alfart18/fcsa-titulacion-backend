@@ -506,12 +506,14 @@ export class PdfGeneratorService {
 
           const totalAnchoPalabras = linea.reduce((acc, t) => acc + t.ancho, 0);
           let espacioEntrePalabras = anchoEspacioBase;
-
           if (justificar && !esUltimaLineaDelBloque && linea.length > 1) {
             const espacioDisponible = anchoLineaMax - totalAnchoPalabras;
             const espacioCalculado = espacioDisponible / (linea.length - 1);
-            if (espacioCalculado < anchoEspacioBase * 3.5) {
-              espacioEntrePalabras = espacioCalculado;
+            
+            if (espacioCalculado > anchoEspacioBase) {
+              espacioEntrePalabras = Math.min(espacioCalculado, anchoEspacioBase * 3.5);
+            } else {
+              espacioEntrePalabras = anchoEspacioBase;
             }
           }
 
@@ -637,37 +639,42 @@ export class PdfGeneratorService {
       });
     }
 
-    // 7. CIERRE Y BLOQUE DE DISTRIBUCIÓN (ESTILO IMAGEN)
+    // 7. CIERRE Y BLOQUE DE DISTRIBUCIÓN
     verificarEspacioOSaltarPagina(escala.signatureBlockHeight);
-    cursorY -= 15; // Espacio de separación antes del cierre
+    cursorY -= 8; // <-- REDUCIDO: Más pegado al artículo anterior (CUARTO)
 
-    // A) "Regístrese, Comuníquese y Archívese." con línea punteada
+    // A) "Regístrese, Comuníquese y Archívese."
+    const fontSizeReg = escala.bodySize + 0.5; // Tamaño base (ej. 10.3 pt)
     const textoRegistrese = 'Regístrese, Comuníquese y Archívese. ';
+    
     paginaActual.drawText(this.templatesService.sanitizarTextoWinAnsi(textoRegistrese), {
       x: this.marginLeft,
       y: cursorY,
-      size: escala.bodySize + 1,
-      font: fontBoldItalic,
+      size: fontSizeReg,
+      font: fontBold,
       color: rgb(0.05, 0.05, 0.05),
     });
 
-    const anchoTexto = fontBoldItalic.widthOfTextAtSize(textoRegistrese, escala.bodySize + 1);
-    // Línea de guiones al lado
-    paginaActual.drawText('. '.repeat(40), {
-      x: this.marginLeft + anchoTexto,
+    const anchoTextoReg = fontBold.widthOfTextAtSize(textoRegistrese, fontSizeReg);
+    const anchoGuionConEspacio = fontBold.widthOfTextAtSize('- ', fontSizeReg);
+    const anchoDisponible = this.contentWidth - anchoTextoReg;
+    const cantidadGuiones = Math.floor(anchoDisponible / anchoGuionConEspacio);
+    
+    paginaActual.drawText('- '.repeat(cantidadGuiones), {
+      x: this.marginLeft + anchoTextoReg,
       y: cursorY,
-      size: escala.bodySize + 1,
-      font: fontBoldItalic,
+      size: fontSizeReg,
+      font: fontBold,
       color: rgb(0.05, 0.05, 0.05),
     });
 
-    // B) Bloque de distribución justo debajo
-    cursorY -= 14; 
+    // B) Bloque de iniciales y distribución
+    cursorY -= 11; // Queda justo debajo, sin el espacio en blanco
     const inicialesDecano = (inicialesDecanoVigente || 'JAAFD').toUpperCase();
     const inicialesOperador = (resolucion.inicialesOperador || 'avc').toLowerCase();
 
     const lineasDistribucion = [
-      `FCSa/${inicialesDecano}/${inicialesOperador}`,
+      `FCSa/ ${inicialesDecano}/${inicialesOperador}`,
       'Interesado (a)',
       'Jurados',
       'Asesor (a)',
@@ -675,19 +682,21 @@ export class PdfGeneratorService {
       'Archivo (1).',
     ];
 
-    for (const lineaDist of lineasDistribucion) {
+    // Usamos forEach con índice para diferenciar la primera línea del resto
+    lineasDistribucion.forEach((lineaDist, index) => {
       paginaActual.drawText(
         this.templatesService.sanitizarTextoWinAnsi(lineaDist),
         {
           x: this.marginLeft,
           y: cursorY,
-          size: 8.5, // Un poco más grande
-          font: fontBold, // En negrita
+          size: index === 0 ? 8.6 : 7.5, // <-- Si es la primera línea (FCSa) es 8.6, si es el resto es 7.5
+          font: fontBold, 
           color: rgb(0.05, 0.05, 0.05),
         },
       );
-      cursorY -= 10; // Interlineado
-    }
+      // El primer salto de línea es un poco más grande para separar las iniciales del resto
+      cursorY -= index === 0 ? 10 : 8.5; 
+    });
 
     // 9. PIE DE PÁGINA INSTITUCIONAL Y SELLO 100% INVISIBLE EN (0,0)
     const selloInvisibleLimpio =
