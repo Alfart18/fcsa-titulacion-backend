@@ -87,6 +87,27 @@ export class ResolucionesService {
             'La resolución antecedente especificada no existe o no pertenece al mismo expediente.',
           );
         }
+        if (antecedente.estadoDocumental !== EstadoDocumentalRes.FIRMADO) {
+          throw new BadRequestException(
+            `La resolución antecedente "${antecedente.numeroCompleto}" aún está pendiente de firma digital (estado ${antecedente.estadoDocumental}). Debe estar FIRMADO para continuar.`,
+          );
+        }
+      }
+
+      const pendienteFirma = await tx.resolucion.findFirst({
+        where: {
+          expedienteId: expediente.id,
+          ...(dto.tesistaId ? { tesistaId: dto.tesistaId } : {}),
+          situacionJuridica: SituacionJuridicaRes.VIGENTE,
+          estadoDocumental: EstadoDocumentalRes.EMITIDO,
+        },
+        select: { numeroCompleto: true },
+      });
+
+      if (pendienteFirma) {
+        throw new BadRequestException(
+          `No se puede avanzar al siguiente paso: la resolución "${pendienteFirma.numeroCompleto}" aún está pendiente de firma digital.`,
+        );
       }
 
       const decanoActivo = await tx.usuario.findFirst({

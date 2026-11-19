@@ -41,17 +41,12 @@ export interface ResultadoArchivoLote {
 export class FirmasServiceService implements OnModuleInit {
   private readonly storageRoot = path.resolve(process.cwd(), 'storage', 'firmados');
 
-  // Par de llaves RSA-2048 en memoria para el simulador de firma digital de desarrollo/sustentación
-  private devKeyPair!: forge.pki.rsa.KeyPair;
-
   constructor(private readonly prisma: PrismaService) {}
 
   onModuleInit() {
     if (!fs.existsSync(this.storageRoot)) {
       fs.mkdirSync(this.storageRoot, { recursive: true });
     }
-    // Generar par de llaves RSA-2048 una sola vez al iniciar el microservicio para que el simulador responda al instante
-    this.devKeyPair = forge.pki.rsa.generateKeyPair({ bits: 2048, e: 0x10001 });
   }
 
   // ==========================================================================

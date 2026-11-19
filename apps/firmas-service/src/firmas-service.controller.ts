@@ -1,5 +1,4 @@
 import {
-  Body,
   Controller,
   Get,
   Param,
@@ -95,30 +94,5 @@ export class FirmasServiceController {
     });
 
     res.end(buffer);
-  }
-
-  // 5. Endpoint de Desarrollo / Defensa de Tesis: Simulador de Firma PKCS#7 / PAdES (RSA-2048 + X.509)
-  @Roles(RolUsuario.DECANO, RolUsuario.SECRETARIA_ACADEMICA, RolUsuario.ADMINISTRATIVO)
-  @Post('dev/simular-firma-pdf/:resolucionId')
-  async simularFirmaDigital(
-    @Param('resolucionId', ParseUUIDPipe) resolucionId: string,
-    @Body() body: { simularTocapuSinMetadatosInfo?: boolean },
-    @Req() req: any,
-    @Res() res: Response,
-  ) {
-    const { bufferFirmado, nombreArchivoFirmado } =
-      await this.firmasService.simularFirmaDigitalPkcs7(
-        resolucionId,
-        body,
-        req.headers.authorization,
-      );
-
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${nombreArchivoFirmado}"`,
-      'Content-Length': bufferFirmado.length,
-    });
-
-    res.end(bufferFirmado);
   }
 }
