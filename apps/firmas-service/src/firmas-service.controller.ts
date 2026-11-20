@@ -15,7 +15,7 @@ import { FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import type { Response } from 'express';
 import { JwtRolesGuard, Roles } from '@app/common';
-import { RolUsuario, SerieNumeracion } from '@prisma/client';
+import { RolUsuario, SerieNumeracion } from '@app/database';
 import { FirmasServiceService } from './firmas-service.service';
 
 @UseGuards(JwtRolesGuard)
@@ -24,7 +24,12 @@ export class FirmasServiceController {
   constructor(private readonly firmasService: FirmasServiceService) {}
 
   // 1. Listar en JSON las resoluciones en estado EMITIDO pendientes de firma
-  @Roles(RolUsuario.DECANO, RolUsuario.SECRETARIA_ACADEMICA, RolUsuario.ADMINISTRATIVO)
+  @Roles(
+    RolUsuario.ADMIN,
+    RolUsuario.DECANO,
+    RolUsuario.SECRETARIA_ACADEMICA,
+    RolUsuario.ADMINISTRATIVO,
+  )
   @Get('pendientes')
   async listarPendientes(
     @Query('serie') serie?: SerieNumeracion,
@@ -34,7 +39,12 @@ export class FirmasServiceController {
   }
 
   // 2. Descargar Lote en ZIP de resoluciones pendientes + manifiesto_lote.json
-  @Roles(RolUsuario.DECANO, RolUsuario.SECRETARIA_ACADEMICA, RolUsuario.ADMINISTRATIVO)
+  @Roles(
+    RolUsuario.ADMIN,
+    RolUsuario.DECANO,
+    RolUsuario.SECRETARIA_ACADEMICA,
+    RolUsuario.ADMINISTRATIVO,
+  )
   @Get('pendientes/zip')
   async descargarZipPendientes(
     @Query('serie') serie: SerieNumeracion | undefined,
@@ -59,7 +69,12 @@ export class FirmasServiceController {
   }
 
   // 3. Subir 1 o N archivos PDF firmados (Drag-and-Drop múltiple con aislamiento de fallos)
-  @Roles(RolUsuario.DECANO, RolUsuario.SECRETARIA_ACADEMICA, RolUsuario.ADMINISTRATIVO)
+  @Roles(
+    RolUsuario.ADMIN,
+    RolUsuario.DECANO,
+    RolUsuario.SECRETARIA_ACADEMICA,
+    RolUsuario.ADMINISTRATIVO,
+  )
   @Post('validar-lote')
   @UseInterceptors(
     FilesInterceptor('archivos', 50, {
@@ -77,7 +92,12 @@ export class FirmasServiceController {
   }
 
   // 4. Descargar un PDF firmado ya validado y almacenado en ./storage/firmados/
-  @Roles(RolUsuario.DECANO, RolUsuario.SECRETARIA_ACADEMICA, RolUsuario.ADMINISTRATIVO)
+  @Roles(
+    RolUsuario.ADMIN,
+    RolUsuario.DECANO,
+    RolUsuario.SECRETARIA_ACADEMICA,
+    RolUsuario.ADMINISTRATIVO,
+  )
   @Get(':resolucionId/pdf-firmado')
   async descargarPdfFirmado(
     @Param('resolucionId', ParseUUIDPipe) resolucionId: string,
