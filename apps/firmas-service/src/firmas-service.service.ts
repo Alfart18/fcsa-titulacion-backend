@@ -1,20 +1,20 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
-import { PrismaService } from '@app/database';
 import {
   EstadoDocumentalRes,
   EstadoExpediente,
   EstadoTesista,
   EstadoUsuario,
-  RolUsuario,
+  PrismaService,
   SerieNumeracion,
   SituacionJuridicaRes,
   TipoResolucion,
-} from '@prisma/client';
+} from '@app/database';
 import { PDFDocument, PDFRawStream, StandardFonts, rgb } from 'pdf-lib';
 import * as forge from 'node-forge';
 import AdmZip = require('adm-zip');
@@ -30,15 +30,24 @@ export interface ResultadoArchivoLote {
   resolucionId?: string;
   numeroCompleto?: string;
   idTramiteDetectado?: string;
-  metodoIdentificacion?: 'NIVEL_1_METADATOS' | 'NIVEL_2_PIE_PAGINA_STREAM' | 'NIVEL_3_NUMERO_RESOLUCION';
+  metodoIdentificacion?:
+    | 'NIVEL_1_METADATOS'
+    | 'NIVEL_2_PIE_PAGINA_STREAM'
+    | 'NIVEL_3_NUMERO_RESOLUCION';
   firmanteCertificado?: string;
   expedienteCerradoComoTitulado?: boolean;
   codigoError?: string;
   mensajeError?: string;
 }
 
+export interface EjecutorFirma {
+  id: string;
+  iniciales?: string;
+}
+
 @Injectable()
 export class FirmasServiceService implements OnModuleInit {
+  private readonly logger = new Logger(FirmasServiceService.name);
   private readonly storageRoot = path.resolve(process.cwd(), 'storage', 'firmados');
 
   constructor(private readonly prisma: PrismaService) {}
@@ -46,6 +55,42 @@ export class FirmasServiceService implements OnModuleInit {
   onModuleInit() {
     if (!fs.existsSync(this.storageRoot)) {
       fs.mkdirSync(this.storageRoot, { recursive: true });
+    }
+  }
+
+  private async resolverUsuarioAuditoriaId(
+    client: Pick<PrismaService, 'usuario'>,
+    ejecutor: EjecutorFirma,
+  ): Promise<string | null> {
+    if (!client?.usuario) return null;
+
+    try {
+      if (ejecutor?.id) {
+        const porId = await client.usuario.findUnique({
+          where: { id: ejecutor.id },
+          select: { id: true },
+        });
+        if (porId) return porId.id;
+      }
+
+      if (ejecutor?.iniciales) {
+        const porIniciales = await client.usuario.findFirst({
+          where: {
+            iniciales: { equals: ejecutor.iniciales, mode: 'insensitive' },
+            estado: EstadoUsuario.ACTIVO,
+          },
+          select: { id: true },
+        });
+        if (porIniciales) return porIniciales.id;
+      }
+
+      const fallback = await client.usuario.findFirst({
+        where: { estado: EstadoUsuario.ACTIVO },
+        select: { id: true },
+      });
+      return fallback?.id ?? null;
+    } catch {
+      return null;
     }
   }
 
@@ -192,8 +237,8 @@ export class FirmasServiceService implements OnModuleInit {
         numeroCompleto: res.numeroCompleto,
         serie: res.serie,
         tipo: res.tipo,
-        codigoExpediente: res.expediente.codigoExpediente,
-        escuelaProfesional: res.expediente.escuelaProfesional.nombre,
+        codigoExpediente: res.expediente?.codigoExpediente ?? 'SIN-EXPEDIENTE',
+        escuelaProfesional: res.expediente?.escuelaProfesional?.nombre ?? 'SIN-ESCUELA',
         idTramiteControl: res.idTramiteControl,
         versionPdf: res.versionPdf,
         hashVersionEsperado: res.hashVersionGenerado,
@@ -228,169 +273,7 @@ export class FirmasServiceService implements OnModuleInit {
   }
 
   // ==========================================================================
-  // 3. SIMULADOR DE FIRMA PKCS#7 / PAdES (PARA DEFENSA DE TESIS Y PRUEBAS)
-  // ==========================================================================
-  private crearCertificadoX509Decano(nombreDecano: string): forge.pki.Certificate {
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = this.devKeyPair.publicKey;
-    cert.serialNumber = '01' + crypto.randomBytes(8).toString('hex');
-
-    const ahora = new Date();
-    cert.validity.notBefore = new Date(ahora.getTime() - 24 * 60 * 60 * 1000);
-    cert.validity.notAfter = new Date(ahora.getTime() + 365 * 24 * 60 * 60 * 1000);
-
-    const attrs = [
-      { name: 'commonName', value: nombreDecano },
-      { name: 'organizationName', value: 'UNIVERSIDAD ANDINA DEL CUSCO' },
-      { shortName: 'OU', value: 'FACULTAD DE CIENCIAS DE LA SALUD - SIMULADOR PKI' },
-      { name: 'countryName', value: 'PE' },
-    ];
-
-    cert.setSubject(attrs);
-    cert.setIssuer(attrs);
-    cert.sign(this.devKeyPair.privateKey, forge.md.sha256.create());
-    return cert;
-  }
-
-  /**
-   * Toma el PDF emitido de una resolución y le inyecta un bloque de firma digital
-   * PAdES / PKCS#7 real (/Type /Sig, /SubFilter /ETSI.CAdES.detached, /ByteRange y /Contents ASN.1 DER)
-   * firmado con RSA-2048 y certificado X.509 del Decano.
-   */
-  async simularFirmaDigitalPkcs7(
-    resolucionId: string,
-    opciones?: { simularTocapuSinMetadatosInfo?: boolean },
-    authHeader?: string,
-  ): Promise<{ bufferFirmado: Buffer; nombreArchivoFirmado: string }> {
-    const resolucion = await this.prisma.resolucion.findUnique({
-      where: { id: resolucionId },
-    });
-
-    if (!resolucion) {
-      throw new NotFoundException('La resolución indicada no existe.');
-    }
-
-    const { buffer: bufferOriginal } = await this.obtenerPdfEmitidoSinFirmar(
-      resolucionId,
-      authHeader,
-    );
-
-    let pdfBaseBuffer = bufferOriginal;
-
-    // Si se desea simular el comportamiento extremo de Tocapu cuando borra el diccionario /Info:
-    if (opciones?.simularTocapuSinMetadatosInfo) {
-      const docSinInfo = await PDFDocument.load(bufferOriginal);
-      docSinInfo.setSubject('');
-      docSinInfo.setKeywords([]);
-      pdfBaseBuffer = Buffer.from(await docSinInfo.save());
-    }
-
-    const decanoActivo = await this.prisma.usuario.findFirst({
-      where: {
-        rol: RolUsuario.DECANO,
-        estado: EstadoUsuario.ACTIVO,
-        esDecanoFirmante: true,
-      },
-    });
-
-    const nombreFirmante = decanoActivo
-      ? `${decanoActivo.gradoTitulo} ${decanoActivo.nombresCompletos}`
-      : resolucion.nombreDecanoSnapshot;
-
-    const cert = this.crearCertificadoX509Decano(nombreFirmante);
-
-    // Reservar espacio fijo para /ByteRange y /Contents (8192 caracteres hex = 4096 bytes DER)
-    const tamanoHexContents = 8192;
-    const placeholderByteRange = '/ByteRange [0000000000 0000000000 0000000000 0000000000]';
-    const placeholderContents = '0'.repeat(tamanoHexContents);
-
-    const bloqueFirmaIncremental =
-      `\n999 0 obj\n<<\n` +
-      `/Type /Sig\n` +
-      `/Filter /Adobe.PPKLite\n` +
-      `/SubFilter /ETSI.CAdES.detached\n` +
-      `/Name (${nombreFirmante})\n` +
-      `/Location (Cusco - Peru)\n` +
-      `/Reason (Firma Digital Oficial FCSa - UAC)\n` +
-      `${placeholderByteRange}\n` +
-      `/Contents <${placeholderContents}>\n` +
-      `>>\nendobj\n%%EOF\n`;
-
-    const bufferConPlaceholder = Buffer.concat([
-      pdfBaseBuffer,
-      Buffer.from(bloqueFirmaIncremental, 'latin1'),
-    ]);
-
-    const textoCompleto = bufferConPlaceholder.toString('latin1');
-    const posInicioContentsHex = textoCompleto.lastIndexOf(`/Contents <`) + `/Contents <`.length;
-    const posAbreAngulo = posInicioContentsHex - 1;
-    const posCierraAngulo = posInicioContentsHex + tamanoHexContents;
-
-    // El estándar PDF ByteRange cubre desde 0 hasta '<' y desde después de '>' hasta el final del archivo
-    const b0 = 0;
-    const l0 = posAbreAngulo;
-    const b1 = posCierraAngulo + 1;
-    const l1 = bufferConPlaceholder.length - b1;
-
-    const byteRangeReal = `/ByteRange [${String(b0).padStart(10, '0')} ${String(l0).padStart(
-      10,
-      '0',
-    )} ${String(b1).padStart(10, '0')} ${String(l1).padStart(10, '0')}]`;
-
-    const posByteRange = textoCompleto.lastIndexOf(placeholderByteRange);
-    bufferConPlaceholder.write(byteRangeReal, posByteRange, 'latin1');
-
-    // Extraer exactamente los bytes cubiertos por el ByteRange para firmarlos con PKCS#7
-    const bytesFirmables = Buffer.concat([
-      bufferConPlaceholder.subarray(b0, b0 + l0),
-      bufferConPlaceholder.subarray(b1, b1 + l1),
-    ]);
-
-    const p7 = forge.pkcs7.createSignedData();
-    p7.content = forge.util.createBuffer(bytesFirmables.toString('binary'));
-    p7.addCertificate(cert);
-    p7.addSigner({
-      key: this.devKeyPair.privateKey,
-      certificate: cert,
-      digestAlgorithm: forge.pki.oids.sha256,
-      authenticatedAttributes: [
-        {
-          type: forge.pki.oids.contentType,
-          value: forge.pki.oids.data,
-        },
-        {
-          type: forge.pki.oids.messageDigest,
-        },
-        {
-          type: forge.pki.oids.signingTime,
-          value: new Date() as any,
-        },
-      ],
-    });
-
-    // Firma detached (el contenido del PDF no se duplica dentro del contenedor PKCS#7)
-    p7.sign({ detached: true });
-
-    const derBytes = forge.asn1.toDer(p7.toAsn1()).getBytes();
-    const hexDer = Buffer.from(derBytes, 'binary').toString('hex').toUpperCase();
-
-    if (hexDer.length > tamanoHexContents) {
-      throw new BadRequestException('El contenedor PKCS#7 excede el tamaño reservado.');
-    }
-
-    const hexDerPadded = hexDer.padEnd(tamanoHexContents, '0');
-    bufferConPlaceholder.write(hexDerPadded, posInicioContentsHex, 'latin1');
-
-    const nombreArchivoFirmado = `${resolucion.numeroCompleto}_v${resolucion.versionPdf}_FIRMADO.pdf`;
-
-    return {
-      bufferFirmado: bufferConPlaceholder,
-      nombreArchivoFirmado,
-    };
-  }
-
-  // ==========================================================================
-  // 4. EXTRACCIÓN EN CASCADA DE 3 NIVELES (RESISTENTE A TOCAPU)
+  // 3. EXTRACCIÓN EN CASCADA DE 3 NIVELES (RESISTENTE A TOCAPU)
   // ==========================================================================
   private async extraerIdentificadorEnCascada(
     pdfBuffer: Buffer,
@@ -400,16 +283,21 @@ export class FirmasServiceService implements OnModuleInit {
     versionDetectada: number | null;
     hashDetectado: string | null;
     numeroResolucionDetectado: string | null;
-    metodo: 'NIVEL_1_METADATOS' | 'NIVEL_2_PIE_PAGINA_STREAM' | 'NIVEL_3_NUMERO_RESOLUCION';
+    metodo:
+      | 'NIVEL_1_METADATOS'
+      | 'NIVEL_2_PIE_PAGINA_STREAM'
+      | 'NIVEL_3_NUMERO_RESOLUCION';
   }> {
     const regexSelloCompleto =
-      /ID-TRAMITE:\s*(TRM-\d{4}-(?:ORD|CF)-\d{4,})\s*\|\s*VER:\s*(\d+)\s*\|\s*HASH:\s*([A-F0-9]{8,64})/i;
+      /ID-TRAMITE:\s*((?:TRAM-\d{4}-\d{4,}-[A-F0-9]{6,}|TRM-\d{4}-(?:ORD|CF)-\d{4,}|TRAM-[A-Z0-9-]+))\s*\|\s*VER:\s*(\d+)\s*\|\s*HASH:\s*([A-F0-9]{6,64})/i;
 
     let pdfDoc: PDFDocument | null = null;
     try {
       pdfDoc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
     } catch {
-      throw new BadRequestException('CORRUPTO_O_NO_PDF: El archivo no es un documento PDF válido.');
+      throw new BadRequestException(
+        'CORRUPTO_O_NO_PDF: El archivo no es un documento PDF válido.',
+      );
     }
 
     // ------------------------------------------------------------------------
@@ -428,9 +316,11 @@ export class FirmasServiceService implements OnModuleInit {
     }
 
     const keywordsStr = pdfDoc.getKeywords() || '';
-    const matchKwTramite = keywordsStr.match(/(TRM-\d{4}-(?:ORD|CF)-\d{4,})/i);
+    const matchKwTramite = keywordsStr.match(
+      /((?:TRAM-\d{4}-\d{4,}-[A-F0-9]{6,}|TRM-\d{4}-(?:ORD|CF)-\d{4,}|TRAM-[A-Z0-9-]+))/i,
+    );
     const matchKwVer = keywordsStr.match(/VER-(\d+)/i);
-    const matchKwHash = keywordsStr.match(/HASH-([A-F0-9]{8,64})/i);
+    const matchKwHash = keywordsStr.match(/HASH-([A-F0-9]{6,64})/i);
     if (matchKwTramite && matchKwVer && matchKwHash) {
       return {
         idTramite: matchKwTramite[1].toUpperCase(),
@@ -475,7 +365,8 @@ export class FirmasServiceService implements OnModuleInit {
     // ------------------------------------------------------------------------
     // NIVEL 3: RESPALDO POR NÚMERO OFICIAL DE RESOLUCIÓN EN TEXTO O NOMBRE DE ARCHIVO
     // ------------------------------------------------------------------------
-    const regexNumeroResolucion = /(\d{4}-\d{4}(?:-CF)?-FCSa-UAC)/i;
+    const regexNumeroResolucion =
+      /(RES-(?:ORD|CF)-\d{4}-\d{4,}|\d{4}-\d{4}(?:-CF)?-FCSa-UAC)/i;
     const matchNumEnTexto = corpusTextoCompleto.match(regexNumeroResolucion);
     const matchNumEnArchivo = nombreArchivoSubido.match(regexNumeroResolucion);
     const matchVerEnArchivo = nombreArchivoSubido.match(/_v(\d+)/i);
@@ -496,7 +387,7 @@ export class FirmasServiceService implements OnModuleInit {
   }
 
   // ==========================================================================
-  // 5. VALIDACIÓN CRIPTOGRÁFICA PKCS#7 / CAdES / PAdES (SOPORTA TOCAPU)
+  // 4. VALIDACIÓN CRIPTOGRÁFICA PKCS#7 / CAdES / PAdES (SOPORTA TOCAPU)
   // ==========================================================================
   private validarFirmaCriptograficaPkcs7(
     pdfBuffer: Buffer,
@@ -565,10 +456,8 @@ export class FirmasServiceService implements OnModuleInit {
       hexLimpio = matchesContents[matchesContents.length - 1][1].replace(/\s+/g, '');
     }
 
-        // Quitar el relleno de ceros (padding) final del contenedor DER
+    // Quitar el relleno de ceros (padding) final del contenedor DER
     const derBufferCompleto = Buffer.from(hexLimpio, 'hex');
-
-    // 🔥 CORTAR LOS CEROS FINALES (PADDING)
     let finDer = derBufferCompleto.length;
     while (finDer > 0 && derBufferCompleto[finDer - 1] === 0) {
       finDer--;
@@ -578,15 +467,12 @@ export class FirmasServiceService implements OnModuleInit {
     let asn1Obj: forge.asn1.Asn1;
     let p7Msg: any;
     try {
-      // @ts-ignore
       asn1Obj = forge.asn1.fromDer(
         forge.util.createBuffer(derBufferLimpio.toString('binary')),
         false,
       );
       p7Msg = forge.pkcs7.messageFromAsn1(asn1Obj);
-    } catch (err) {
-      console.log('Error parseando PKCS7:', err); // Para depuración
-
+    } catch {
       throw new BadRequestException(
         'PKCS7_CORRUPTO: La estructura criptográfica ASN.1 PKCS#7/CAdES no es válida o fue alterada.',
       );
@@ -595,7 +481,7 @@ export class FirmasServiceService implements OnModuleInit {
     const certificados: forge.pki.Certificate[] = p7Msg.certificates || [];
     if (certificados.length === 0) {
       throw new BadRequestException(
-        'SIN_CERTIFICADO_X509: La firma digital no incluye ningún certificado X.509 de respaldos.',
+        'SIN_CERTIFICADO_X509: La firma digital no incluye ningún certificado X.509 de respaldo.',
       );
     }
 
@@ -690,11 +576,11 @@ export class FirmasServiceService implements OnModuleInit {
   }
 
   // ==========================================================================
-  // 6. VALIDACIÓN DE LOTE DE ARCHIVOS PDF CON AISLAMIENTO DE FALLOS
+  // 5. VALIDACIÓN DE LOTE DE ARCHIVOS PDF CON AISLAMIENTO DE FALLOS
   // ==========================================================================
   async validarLotePdfsFirmados(
     archivos: Array<Express.Multer.File>,
-    ejecutor: { id: string; iniciales: string },
+    ejecutor: EjecutorFirma,
   ) {
     if (!archivos || archivos.length === 0) {
       throw new BadRequestException(
@@ -725,11 +611,12 @@ export class FirmasServiceService implements OnModuleInit {
 
   private async procesarArchivoFirmadoIndividual(
     archivo: Express.Multer.File,
-    ejecutor: { id: string; iniciales: string },
+    ejecutor: EjecutorFirma,
   ): Promise<ResultadoArchivoLote> {
     const buffer = archivo.buffer;
     const nombreArchivo = archivo.originalname || 'archivo_sin_nombre.pdf';
     const sha256Archivo = crypto.createHash('sha256').update(buffer).digest('hex').toUpperCase();
+    const inicialesEjecutor = ejecutor?.iniciales || 'SYS';
 
     try {
       // 1. Validar Magic Bytes reales (%PDF-)
@@ -750,7 +637,7 @@ export class FirmasServiceService implements OnModuleInit {
 
       if (!resolucion && extraccion.numeroResolucionDetectado) {
         resolucion = await this.prisma.resolucion.findUnique({
-          where: { numeroCompleto: extraccion.numeroResolucionDetectado},
+          where: { numeroCompleto: extraccion.numeroResolucionDetectado },
         });
       }
 
@@ -784,7 +671,7 @@ export class FirmasServiceService implements OnModuleInit {
 
       if (
         extraccion.hashDetectado !== null &&
-        extraccion.hashDetectado !== resolucion.hashVersionGenerado
+        extraccion.hashDetectado.toUpperCase() !== resolucion.hashVersionGenerado.toUpperCase()
       ) {
         throw new BadRequestException(
           `HASH_VERSION_DESACTUALIZADO: El código HASH del PDF (${extraccion.hashDetectado}) no coincide con el último HASH emitido (${resolucion.hashVersionGenerado}).`,
@@ -836,7 +723,11 @@ export class FirmasServiceService implements OnModuleInit {
 
         let expedienteCerradoComoTitulado = false;
 
-        if (resActualizada.tipo === TipoResolucion.TITULO && resActualizada.tesistaId) {
+        if (
+          resActualizada.tipo === TipoResolucion.TITULO &&
+          resActualizada.tesistaId &&
+          resActualizada.expedienteId
+        ) {
           await tx.tesista.update({
             where: { id: resActualizada.tesistaId },
             data: { estado: EstadoTesista.TITULADO },
@@ -871,35 +762,43 @@ export class FirmasServiceService implements OnModuleInit {
           if (todosConTituloFirmado) {
             await tx.expediente.update({
               where: { id: resActualizada.expedienteId },
-              data: { estado: EstadoExpediente.TITULADO },
+              data: { estado: EstadoExpediente.FINALIZADO },
             });
             expedienteCerradoComoTitulado = true;
           }
         }
 
-        await tx.registroAuditoria.create({
-          data: {
-            usuarioId: ejecutor.id,
-            inicialesUsuario: ejecutor.iniciales,
-            accion: 'VALIDACION_FIRMA_PDF',
-            entidad: 'resoluciones',
-            entidadId: resActualizada.id,
-            expedienteId: resActualizada.expedienteId,
-            resolucionId: resActualizada.id,
-            detalle: {
-              nombreArchivoSubido: nombreArchivo,
-              numeroCompleto: resActualizada.numeroCompleto,
-              idTramiteControl: resActualizada.idTramiteControl,
-              metodoIdentificacionCascada: extraccion.metodo,
-              firmanteCertificadoCN: infoFirma.firmanteCN,
-              organizacionCertificado: infoFirma.organizacion,
-              algoritmoDigest: infoFirma.algoritmoDigest,
-              pdfFirmadoPath: rutaRelativaBd,
-              pdfFirmadoSha256: sha256Archivo,
-              expedienteCerradoComoTitulado,
+        const usuarioAuditoriaId = await this.resolverUsuarioAuditoriaId(tx, ejecutor);
+        if (usuarioAuditoriaId) {
+          await tx.registroAuditoria.create({
+            data: {
+              usuarioId: usuarioAuditoriaId,
+              inicialesUsuario: inicialesEjecutor,
+              accion: 'VALIDACION_FIRMA_PDF',
+              entidad: 'resoluciones',
+              entidadId: resActualizada.id,
+              expedienteId: resActualizada.expedienteId,
+              resolucionId: resActualizada.id,
+              detalle: {
+                ejecutorIdJwt: ejecutor?.id ?? null,
+                nombreArchivoSubido: nombreArchivo,
+                numeroCompleto: resActualizada.numeroCompleto,
+                idTramiteControl: resActualizada.idTramiteControl,
+                metodoIdentificacionCascada: extraccion.metodo,
+                firmanteCertificadoCN: infoFirma.firmanteCN,
+                organizacionCertificado: infoFirma.organizacion,
+                algoritmoDigest: infoFirma.algoritmoDigest,
+                pdfFirmadoPath: rutaRelativaBd,
+                pdfFirmadoSha256: sha256Archivo,
+                expedienteCerradoComoTitulado,
+              },
             },
-          },
-        });
+          });
+        } else {
+          this.logger.warn(
+            `No se encontró usuario espejo en esquema public para auditar VALIDACION_FIRMA_PDF (ejecutor JWT: ${ejecutor?.id}).`,
+          );
+        }
 
         return { resActualizada, expedienteCerradoComoTitulado };
       });
@@ -921,21 +820,31 @@ export class FirmasServiceService implements OnModuleInit {
       const partes = mensajeCompleto.split(':');
       const codigoError = partes.length > 1 ? partes[0].trim() : 'ERROR_VALIDACION_FIRMA';
 
-      // Registro Forense obligatorio en RegistroAuditoria (Acuerdo 6)
-      await this.prisma.registroAuditoria.create({
-        data: {
-          usuarioId: ejecutor.id,
-          inicialesUsuario: ejecutor.iniciales,
-          accion: 'RECHAZO_VALIDACION_FIRMA_PDF',
-          entidad: 'resoluciones',
-          detalle: {
-            nombreArchivoSubido: nombreArchivo,
-            sha256ArchivoSubido: sha256Archivo,
-            codigoError,
-            motivoRechazo: mensajeCompleto,
-          },
-        },
-      });
+      // Registro Forense en RegistroAuditoria (protegido para no abortar el lote)
+      try {
+        const usuarioAuditoriaId = await this.resolverUsuarioAuditoriaId(this.prisma, ejecutor);
+        if (usuarioAuditoriaId && this.prisma.registroAuditoria) {
+          await this.prisma.registroAuditoria.create({
+            data: {
+              usuarioId: usuarioAuditoriaId,
+              inicialesUsuario: inicialesEjecutor,
+              accion: 'RECHAZO_VALIDACION_FIRMA_PDF',
+              entidad: 'resoluciones',
+              detalle: {
+                ejecutorIdJwt: ejecutor?.id ?? null,
+                nombreArchivoSubido: nombreArchivo,
+                sha256ArchivoSubido: sha256Archivo,
+                codigoError,
+                motivoRechazo: mensajeCompleto,
+              },
+            },
+          });
+        }
+      } catch (auditErr) {
+        this.logger.warn(
+          `No se pudo registrar auditoría de rechazo para ${nombreArchivo}: ${(auditErr as Error).message}`,
+        );
+      }
 
       return {
         nombreArchivo,
@@ -948,7 +857,7 @@ export class FirmasServiceService implements OnModuleInit {
   }
 
   // ==========================================================================
-  // 7. DESCARGAR EL ARCHIVO PDF FIRMADO ALMACENADO EN STORAGE
+  // 6. DESCARGAR EL ARCHIVO PDF FIRMADO ALMACENADO EN STORAGE
   // ==========================================================================
   async descargarPdfFirmadoGuardado(resolucionId: string): Promise<{
     buffer: Buffer;
