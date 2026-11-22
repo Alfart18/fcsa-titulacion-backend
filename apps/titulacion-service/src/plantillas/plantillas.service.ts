@@ -77,6 +77,8 @@ export class PlantillasService implements OnModuleInit {
     const nuevaVersion = actual.versionActual + 1;
 
     return this.prisma.$transaction(async (tx) => {
+      const usuarioId = await this.prisma.resolverUsuarioId(usuario, tx);
+
       const actualizada = await tx.plantillaResolucion.update({
         where: { id: actual.id },
         data: {
@@ -86,7 +88,7 @@ export class PlantillasService implements OnModuleInit {
           cuerpoHtml: dto.cuerpoHtml,
           activa: dto.activa ?? actual.activa,
           versionActual: nuevaVersion,
-          actualizadoPorId: usuario.id,
+          actualizadoPorId: usuarioId,
         },
       });
 
@@ -97,13 +99,13 @@ export class PlantillasService implements OnModuleInit {
           asuntoPlantilla: actualizada.asuntoPlantilla,
           cuerpoHtml: actualizada.cuerpoHtml,
           motivoCambio: dto.motivoCambio ?? `Actualización manual a versión ${nuevaVersion}`,
-          modificadoPorId: usuario.id,
+          modificadoPorId: usuarioId,
         },
       });
 
       await tx.registroAuditoria.create({
         data: {
-          usuarioId: usuario.id,
+          usuarioId,
           inicialesUsuario: usuario.iniciales,
           accion: 'ACTUALIZAR_PLANTILLA_RESOLUCION',
           entidad: 'PlantillaResolucion',

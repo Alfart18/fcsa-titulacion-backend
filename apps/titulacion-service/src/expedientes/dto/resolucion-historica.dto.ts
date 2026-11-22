@@ -44,6 +44,34 @@ export class ResolucionHistoricaDto {
   dictaminante2Id?: string;
 
   @IsOptional()
+  @IsString({ message: 'El nombre del tercer dictaminante debe ser una cadena de texto.' })
+  @MaxLength(200, { message: 'El nombre del tercer dictaminante no puede exceder los 200 caracteres.' })
+  nombreDictaminante3?: string;
+
+  @IsOptional()
+  @IsUUID('4', { message: 'El ID del tercer dictaminante debe ser un UUID v4 válido.' })
+  dictaminante3Id?: string;
+
+  @IsOptional()
+  @IsDateString({}, { message: 'La fecha de sustentación debe tener formato ISO (YYYY-MM-DD).' })
+  fechaSustentacion?: string;
+
+  @IsOptional()
+  @IsString({ message: 'La hora de sustentación debe ser una cadena de texto.' })
+  @MaxLength(30, { message: 'La hora de sustentación no puede exceder los 30 caracteres.' })
+  horaSustentacion?: string;
+
+  @IsOptional()
+  @IsString({ message: 'La modalidad de sustentación debe ser una cadena de texto.' })
+  @MaxLength(20, { message: 'La modalidad de sustentación no puede exceder los 20 caracteres.' })
+  modalidadSustentacion?: string;
+
+  @IsOptional()
+  @IsString({ message: 'El lugar de sustentación debe ser una cadena de texto.' })
+  @MaxLength(250, { message: 'El lugar de sustentación no puede exceder los 250 caracteres.' })
+  lugarSustentacion?: string;
+
+  @IsOptional()
   @IsString({ message: 'El título de la tesis debe ser una cadena de texto.' })
   @MaxLength(500, { message: 'El título de la tesis no puede exceder los 500 caracteres.' })
   tituloTesis?: string;
