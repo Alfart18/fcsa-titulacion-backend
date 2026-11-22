@@ -47,6 +47,31 @@ export class CrearExpedienteDto {
   @ValidateNested()
   @Type(() => ResolucionHistoricaDto)
   resolucionDictaminantes?: ResolucionHistoricaDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ResolucionHistoricaDto)
+  resolucionInscripcion?: ResolucionHistoricaDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ResolucionHistoricaDto)
+  resolucionTercerDictaminante?: ResolucionHistoricaDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ResolucionHistoricaDto)
+  resolucionApto?: ResolucionHistoricaDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ResolucionHistoricaDto)
+  resolucionAptoTesista2?: ResolucionHistoricaDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ResolucionHistoricaDto)
+  resolucionFechaHora?: ResolucionHistoricaDto;
 }
 
 export class CambiarEstadoExpedienteDto {

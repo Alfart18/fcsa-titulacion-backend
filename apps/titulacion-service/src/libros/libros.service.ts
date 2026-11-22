@@ -96,6 +96,8 @@ export class LibrosService {
         tx, dto.serie, anio, contador.ultimoNumero,
       );
 
+      const usuarioId = await this.prisma.resolverUsuarioId(usuario, tx);
+
       const asiento = await tx.libroNumeracion.create({
         data: {
           numeroCompleto,
@@ -106,7 +108,7 @@ export class LibrosService {
           tipoDocumentoExterno: tipoDocExterno.slice(0, 80),
           descripcion: dto.descripcion.trim(),
           fechaDocumento: dto.fechaDocumento ? new Date(dto.fechaDocumento) : new Date(),
-          registradoPorId: usuario.id,
+          registradoPorId: usuarioId,
           resolucionId: null,
         },
         include: {
@@ -116,7 +118,7 @@ export class LibrosService {
 
       await tx.registroAuditoria.create({
         data: {
-          usuarioId: usuario.id,
+          usuarioId,
           inicialesUsuario: usuario.iniciales,
           accion: 'RESERVAR_NUMERACION_EXTERNA',
           entidad: 'LibroNumeracion',

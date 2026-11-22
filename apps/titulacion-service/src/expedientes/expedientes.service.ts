@@ -50,7 +50,7 @@ export class ExpedientesService {
 
     if (pasoActual >= 2) {
       if (!dto.resolucionAsesor) throw new BadRequestException('Para iniciar un expediente en un paso mayor o igual a 2, es obligatorio registrar la resolución histórica de designación de asesor.');
-      if (!dto.resolucionAsesor.nombreAsesor && !dto.resolucionAsesor.asesorDocenteId) throw new BadRequestException('La resolución histórica de asesor debe incluir el nombre del asesor o su identificador de docente.');
+      if (!dto.resolucionAsesor.nombreAsesor?.trim() && !dto.resolucionAsesor.asesorDocenteId) throw new BadRequestException('La resolución histórica de asesor debe incluir el nombre del asesor o su identificador de docente.');
     }
 
     if (pasoActual >= 3) {
@@ -58,7 +58,43 @@ export class ExpedientesService {
       const tieneDictaminantesTexto = Boolean(dto.resolucionDictaminantes.nombreDictaminantes?.trim()) || (Boolean(dto.resolucionDictaminantes.nombreDictaminante1?.trim()) && Boolean(dto.resolucionDictaminantes.nombreDictaminante2?.trim()));
       const tieneDictaminantesIds = Boolean(dto.resolucionDictaminantes.dictaminante1Id) && Boolean(dto.resolucionDictaminantes.dictaminante2Id);
       if (!tieneDictaminantesTexto && !tieneDictaminantesIds) throw new BadRequestException('La resolución histórica de dictaminantes debe especificar los nombres o identificadores de los dictaminantes.');
-      if (dto.resolucionAsesor && dto.resolucionAsesor.numeroCompleto.trim().toUpperCase() === dto.resolucionDictaminantes.numeroCompleto.trim().toUpperCase()) throw new BadRequestException('La resolución histórica de asesor y la de dictaminantes no pueden tener el mismo número de resolución.');
+    }
+
+    if (pasoActual >= 4) {
+      if (!dto.resolucionInscripcion) throw new BadRequestException('Para iniciar un expediente en un paso mayor o igual a 4, es obligatorio registrar la resolución histórica de inscripción del proyecto (Paso 3).');
+    }
+
+    if (pasoActual >= 5) {
+      if (!dto.resolucionTercerDictaminante) throw new BadRequestException('Para iniciar un expediente en un paso mayor o igual a 5, es obligatorio registrar la resolución histórica del tercer dictaminante (Paso 4).');
+      if (!dto.resolucionTercerDictaminante.nombreDictaminante3?.trim() && !dto.resolucionTercerDictaminante.dictaminante3Id) {
+        throw new BadRequestException('La resolución histórica de tercer dictaminante debe especificar el nombre o identificador del tercer dictaminante.');
+      }
+    }
+
+    if (pasoActual >= 6) {
+      if (!dto.resolucionApto) throw new BadRequestException('Para iniciar un expediente en un paso mayor o igual a 6, es obligatorio registrar la resolución histórica de Apto para Título Profesional (Paso 5).');
+    }
+
+    if (pasoActual >= 7) {
+      if (!dto.resolucionFechaHora) throw new BadRequestException('Para iniciar un expediente en el paso 7, es obligatorio registrar la resolución histórica de Fecha y Hora de Sustentación (Paso 6).');
+    }
+
+    // Validar que no se repitan números de resolución entre los antecedentes históricos enviados
+    const numerosHistoricos = [
+      pasoActual >= 2 ? dto.resolucionAsesor?.numeroCompleto : undefined,
+      pasoActual >= 3 ? dto.resolucionDictaminantes?.numeroCompleto : undefined,
+      pasoActual >= 4 ? dto.resolucionInscripcion?.numeroCompleto : undefined,
+      pasoActual >= 5 ? dto.resolucionTercerDictaminante?.numeroCompleto : undefined,
+      pasoActual >= 6 ? dto.resolucionApto?.numeroCompleto : undefined,
+      pasoActual >= 6 && dto.cantidadTesistas === 2 ? dto.resolucionAptoTesista2?.numeroCompleto : undefined,
+      pasoActual >= 7 ? dto.resolucionFechaHora?.numeroCompleto : undefined,
+    ]
+      .filter((n): n is string => Boolean(n && n.trim().length > 0))
+      .map((n) => n.trim().toUpperCase());
+
+    const numerosUnicos = new Set(numerosHistoricos);
+    if (numerosUnicos.size !== numerosHistoricos.length) {
+      throw new BadRequestException('Los números de las resoluciones históricas previas no pueden repetirse entre sí.');
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -74,11 +110,15 @@ export class ExpedientesService {
       const codigoExpediente = `EXP-${anioActual}-${contador.ultimoNumero.toString().padStart(4, '0')}`;
       const tituloInicial = dto.tituloActual?.trim() || dto.resolucionDictaminantes?.tituloTesis?.trim() || dto.resolucionAsesor?.tituloTesis?.trim() || null;
 
+      const usuarioId = await this.prisma.resolverUsuarioId(usuarioActual, tx);
+
       const expediente = await tx.expediente.create({
         data: {
-          codigoExpediente, escuelaProfesionalId: dto.escuelaProfesionalId, estado: EstadoExpediente.EN_PROCESO, cantidadTesistas: dto.cantidadTesistas, pasoActual, tituloActual: tituloInicial, creadoPorId: usuarioActual.sub,
+          codigoExpediente, escuelaProfesionalId: dto.escuelaProfesionalId, estado: EstadoExpediente.EN_PROCESO, cantidadTesistas: dto.cantidadTesistas, pasoActual, tituloActual: tituloInicial, creadoPorId: usuarioId,
         },
       });
+
+      const tesistasCreados: Array<{ id: string; orden: number }> = [];
 
       for (let i = 0; i < dto.tesistas.length; i++) {
         const item = dto.tesistas[i];
@@ -106,7 +146,8 @@ export class ExpedientesService {
           if (!persona.esEstudiante) persona = await tx.persona.update({ where: { id: persona.id }, data: { esEstudiante: true } });
         }
 
-        await tx.tesista.create({ data: { expedienteId: expediente.id, personaId: persona.id, orden: i + 1, estado: EstadoTesista.ACTIVO } });
+        const tesistaCreado = await tx.tesista.create({ data: { expedienteId: expediente.id, personaId: persona.id, orden: i + 1, estado: EstadoTesista.ACTIVO } });
+        tesistasCreados.push({ id: tesistaCreado.id, orden: tesistaCreado.orden });
       }
 
       const decanoActivo = await tx.usuario.findFirst({ where: { esDecanoFirmante: true, estado: EstadoUsuario.ACTIVO } });
@@ -119,6 +160,9 @@ export class ExpedientesService {
       let tituloResolucionId: string | null = null;
       let dictaminante1Id: string | null = null;
       let dictaminante2Id: string | null = null;
+      let dictaminante3Id: string | null = null;
+      let inscripcionResolucionId: string | null = null;
+      let fechaHoraResolucionId: string | null = null;
 
       if (pasoActual >= 2 && dto.resolucionAsesor) {
         const numeroCompletoAsesor = dto.resolucionAsesor.numeroCompleto.trim();
@@ -135,8 +179,14 @@ export class ExpedientesService {
           data: {
             expedienteId: expediente.id, tipo: TipoResolucion.ASESOR, serie: SerieNumeracion.ORD, numeroCorrelativo: correlativoHistoricoAsesor, anioNumeracion: anioAsesor, numeroCompleto: numeroCompletoAsesor,
             situacionJuridica: SituacionJuridicaRes.VIGENTE, estadoDocumental: EstadoDocumentalRes.FIRMADO, origen: OrigenResolucion.HISTORICO, fechaEmision: fechaEmisionAsesor, nombreDecanoSnapshot, inicialesOperador,
-            datosEspecificos: { origen: 'HISTORICO', nombreAsesor: dto.resolucionAsesor.nombreAsesor?.trim() ?? null, asesorDocenteId: dto.resolucionAsesor.asesorDocenteId ?? null, tituloTesis: dto.resolucionAsesor.tituloTesis?.trim() ?? null },
-            idTramiteControl: idTramiteAsesor, versionPdf: 1, hashVersionGenerado: hashAsesor, usuarioEmisorId: usuarioActual.sub,
+            datosEspecificos: {
+              origen: 'HISTORICO',
+              nombreAsesor: dto.resolucionAsesor.nombreAsesor?.trim() ?? null,
+              asesorNombreCompletoSnapshot: dto.resolucionAsesor.nombreAsesor?.trim() ?? null,
+              asesorDocenteId: dto.resolucionAsesor.asesorDocenteId ?? null,
+              tituloTesis: dto.resolucionAsesor.tituloTesis?.trim() ?? null,
+            },
+            idTramiteControl: idTramiteAsesor, versionPdf: 1, hashVersionGenerado: hashAsesor, usuarioEmisorId: usuarioId,
           },
         });
         asesorResolucionId = resolucionAsesor.id;
@@ -158,9 +208,20 @@ export class ExpedientesService {
         const resolucionDictamen = await tx.resolucion.create({
           data: {
             expedienteId: expediente.id, tipo: TipoResolucion.DICTAMEN, serie: SerieNumeracion.ORD, numeroCorrelativo: correlativoHistoricoDict, anioNumeracion: anioDict, numeroCompleto: numeroCompletoDict,
+            resolucionAntecedenteId: asesorResolucionId,
             situacionJuridica: SituacionJuridicaRes.VIGENTE, estadoDocumental: EstadoDocumentalRes.FIRMADO, origen: OrigenResolucion.HISTORICO, fechaEmision: fechaEmisionDict, nombreDecanoSnapshot, inicialesOperador,
-            datosEspecificos: { origen: 'HISTORICO', nombreDictaminantes: dto.resolucionDictaminantes.nombreDictaminantes?.trim() ?? null, nombreDictaminante1: dto.resolucionDictaminantes.nombreDictaminante1?.trim() ?? null, nombreDictaminante2: dto.resolucionDictaminantes.nombreDictaminante2?.trim() ?? null, dictaminante1Id: dto.resolucionDictaminantes.dictaminante1Id ?? null, dictaminante2Id: dto.resolucionDictaminantes.dictaminante2Id ?? null, tituloTesis: dto.resolucionDictaminantes.tituloTesis?.trim() ?? tituloInicial },
-            idTramiteControl: idTramiteDict, versionPdf: 1, hashVersionGenerado: hashDict, usuarioEmisorId: usuarioActual.sub,
+            datosEspecificos: {
+              origen: 'HISTORICO',
+              nombreDictaminantes: dto.resolucionDictaminantes.nombreDictaminantes?.trim() ?? null,
+              nombreDictaminante1: dto.resolucionDictaminantes.nombreDictaminante1?.trim() ?? null,
+              dictaminante1Snapshot: dto.resolucionDictaminantes.nombreDictaminante1?.trim() ?? null,
+              nombreDictaminante2: dto.resolucionDictaminantes.nombreDictaminante2?.trim() ?? null,
+              dictaminante2Snapshot: dto.resolucionDictaminantes.nombreDictaminante2?.trim() ?? null,
+              dictaminante1Id: dto.resolucionDictaminantes.dictaminante1Id ?? null,
+              dictaminante2Id: dto.resolucionDictaminantes.dictaminante2Id ?? null,
+              tituloTesis: dto.resolucionDictaminantes.tituloTesis?.trim() ?? tituloInicial,
+            },
+            idTramiteControl: idTramiteDict, versionPdf: 1, hashVersionGenerado: hashDict, usuarioEmisorId: usuarioId,
           },
         });
         dictaminantesResolucionId = resolucionDictamen.id;
@@ -169,10 +230,150 @@ export class ExpedientesService {
         dictaminante2Id = dto.resolucionDictaminantes.dictaminante2Id ?? null;
       }
 
-      if (asesorResolucionId || dictaminantesResolucionId) {
+      if (pasoActual >= 4 && dto.resolucionInscripcion) {
+        const numeroCompletoInsc = dto.resolucionInscripcion.numeroCompleto.trim();
+        const duplicadaInsc = await tx.resolucion.findUnique({ where: { numeroCompleto: numeroCompletoInsc } });
+        if (duplicadaInsc) throw new ConflictException(`El número de resolución "${numeroCompletoInsc}" ya se encuentra registrado en el sistema.`);
+
+        const fechaEmisionInsc = new Date(dto.resolucionInscripcion.fechaEmision);
+        const anioInsc = fechaEmisionInsc.getUTCFullYear();
+        const correlativoHistoricoInsc = await this.obtenerSiguienteCorrelativoHistorico(tx, SerieNumeracion.ORD, anioInsc);
+        const idTramiteInsc = `HIST-INSCRIPCION-${randomUUID()}`;
+        const hashInsc = this.generarHashHistorico(`${expediente.id}:${numeroCompletoInsc}:${idTramiteInsc}`);
+
+        const resolucionInscripcion = await tx.resolucion.create({
+          data: {
+            expedienteId: expediente.id, tipo: TipoResolucion.INSCRIPCION, serie: SerieNumeracion.ORD, numeroCorrelativo: correlativoHistoricoInsc, anioNumeracion: anioInsc, numeroCompleto: numeroCompletoInsc,
+            resolucionAntecedenteId: dictaminantesResolucionId,
+            situacionJuridica: SituacionJuridicaRes.VIGENTE, estadoDocumental: EstadoDocumentalRes.FIRMADO, origen: OrigenResolucion.HISTORICO, fechaEmision: fechaEmisionInsc, nombreDecanoSnapshot, inicialesOperador,
+            datosEspecificos: {
+              origen: 'HISTORICO',
+              tituloTesis: dto.resolucionInscripcion.tituloTesis?.trim() ?? tituloInicial,
+            },
+            idTramiteControl: idTramiteInsc, versionPdf: 1, hashVersionGenerado: hashInsc, usuarioEmisorId: usuarioId,
+          },
+        });
+        inscripcionResolucionId = resolucionInscripcion.id;
+      }
+
+      if (pasoActual >= 5 && dto.resolucionTercerDictaminante) {
+        const numeroCompletoTD = dto.resolucionTercerDictaminante.numeroCompleto.trim();
+        const duplicadaTD = await tx.resolucion.findUnique({ where: { numeroCompleto: numeroCompletoTD } });
+        if (duplicadaTD) throw new ConflictException(`El número de resolución "${numeroCompletoTD}" ya se encuentra registrado en el sistema.`);
+
+        const fechaEmisionTD = new Date(dto.resolucionTercerDictaminante.fechaEmision);
+        const anioTD = fechaEmisionTD.getUTCFullYear();
+        const correlativoHistoricoTD = await this.obtenerSiguienteCorrelativoHistorico(tx, SerieNumeracion.ORD, anioTD);
+        const idTramiteTD = `HIST-TERCER-DICT-${randomUUID()}`;
+        const hashTD = this.generarHashHistorico(`${expediente.id}:${numeroCompletoTD}:${idTramiteTD}`);
+
+        const resolucionTercerDict = await tx.resolucion.create({
+          data: {
+            expedienteId: expediente.id, tipo: TipoResolucion.TERCER_DICT, serie: SerieNumeracion.ORD, numeroCorrelativo: correlativoHistoricoTD, anioNumeracion: anioTD, numeroCompleto: numeroCompletoTD,
+            resolucionAntecedenteId: inscripcionResolucionId ?? dictaminantesResolucionId,
+            situacionJuridica: SituacionJuridicaRes.VIGENTE, estadoDocumental: EstadoDocumentalRes.FIRMADO, origen: OrigenResolucion.HISTORICO, fechaEmision: fechaEmisionTD, nombreDecanoSnapshot, inicialesOperador,
+            datosEspecificos: {
+              origen: 'HISTORICO',
+              dictaminante1Snapshot: dto.resolucionDictaminantes?.nombreDictaminante1?.trim() ?? null,
+              dictaminante2Snapshot: dto.resolucionDictaminantes?.nombreDictaminante2?.trim() ?? null,
+              nombreDictaminante3: dto.resolucionTercerDictaminante.nombreDictaminante3?.trim() ?? null,
+              dictaminante3Snapshot: dto.resolucionTercerDictaminante.nombreDictaminante3?.trim() ?? null,
+              dictaminante3Id: dto.resolucionTercerDictaminante.dictaminante3Id ?? null,
+            },
+            idTramiteControl: idTramiteTD, versionPdf: 1, hashVersionGenerado: hashTD, usuarioEmisorId: usuarioId,
+          },
+        });
+        dictaminante3Id = dto.resolucionTercerDictaminante.dictaminante3Id ?? null;
+        dictaminantesResolucionId = resolucionTercerDict.id;
+      }
+
+      if (pasoActual >= 6 && dto.resolucionApto && tesistasCreados.length > 0) {
+        const crearAptoHistorico = async (resDto: NonNullable<CrearExpedienteDto['resolucionApto']>, tesistaId: string) => {
+          const numeroCompletoApto = resDto.numeroCompleto.trim();
+          const duplicadaApto = await tx.resolucion.findUnique({ where: { numeroCompleto: numeroCompletoApto } });
+          if (duplicadaApto) throw new ConflictException(`El número de resolución "${numeroCompletoApto}" ya se encuentra registrado en el sistema.`);
+
+          const fechaEmisionApto = new Date(resDto.fechaEmision);
+          const anioApto = fechaEmisionApto.getUTCFullYear();
+          const correlativoHistoricoApto = await this.obtenerSiguienteCorrelativoHistorico(tx, SerieNumeracion.CF, anioApto);
+          const idTramiteApto = `HIST-APTO-${randomUUID()}`;
+          const hashApto = this.generarHashHistorico(`${expediente.id}:${tesistaId}:${numeroCompletoApto}:${idTramiteApto}`);
+
+          return tx.resolucion.create({
+            data: {
+              expedienteId: expediente.id, tesistaId, tipo: TipoResolucion.APTO, serie: SerieNumeracion.CF, numeroCorrelativo: correlativoHistoricoApto, anioNumeracion: anioApto, numeroCompleto: numeroCompletoApto,
+              resolucionAntecedenteId: dictaminantesResolucionId,
+              situacionJuridica: SituacionJuridicaRes.VIGENTE, estadoDocumental: EstadoDocumentalRes.FIRMADO, origen: OrigenResolucion.HISTORICO, fechaEmision: fechaEmisionApto, nombreDecanoSnapshot, inicialesOperador,
+              datosEspecificos: { origen: 'HISTORICO' },
+              idTramiteControl: idTramiteApto, versionPdf: 1, hashVersionGenerado: hashApto, usuarioEmisorId: usuarioId,
+            },
+          });
+        };
+
+        const resApto1 = await crearAptoHistorico(dto.resolucionApto, tesistasCreados[0].id);
+        await tx.tesista.update({
+          where: { id: tesistasCreados[0].id },
+          data: { aptoResolucionId: resApto1.id, estado: EstadoTesista.APTO },
+        });
+
+        if (tesistasCreados.length === 2) {
+          if (dto.resolucionAptoTesista2?.numeroCompleto?.trim()) {
+            const resApto2 = await crearAptoHistorico(dto.resolucionAptoTesista2, tesistasCreados[1].id);
+            await tx.tesista.update({
+              where: { id: tesistasCreados[1].id },
+              data: { aptoResolucionId: resApto2.id, estado: EstadoTesista.APTO },
+            });
+          } else {
+            await tx.tesista.update({
+              where: { id: tesistasCreados[1].id },
+              data: { aptoResolucionId: resApto1.id, estado: EstadoTesista.APTO },
+            });
+          }
+        }
+      }
+
+      if (pasoActual >= 7 && dto.resolucionFechaHora) {
+        const numeroCompletoFH = dto.resolucionFechaHora.numeroCompleto.trim();
+        const duplicadaFH = await tx.resolucion.findUnique({ where: { numeroCompleto: numeroCompletoFH } });
+        if (duplicadaFH) throw new ConflictException(`El número de resolución "${numeroCompletoFH}" ya se encuentra registrado en el sistema.`);
+
+        const fechaEmisionFH = new Date(dto.resolucionFechaHora.fechaEmision);
+        const anioFH = fechaEmisionFH.getUTCFullYear();
+        const correlativoHistoricoFH = await this.obtenerSiguienteCorrelativoHistorico(tx, SerieNumeracion.ORD, anioFH);
+        const idTramiteFH = `HIST-FECHA-HORA-${randomUUID()}`;
+        const hashFH = this.generarHashHistorico(`${expediente.id}:${numeroCompletoFH}:${idTramiteFH}`);
+
+        const resolucionFechaHora = await tx.resolucion.create({
+          data: {
+            expedienteId: expediente.id, tipo: TipoResolucion.FECHA_HORA, serie: SerieNumeracion.ORD, numeroCorrelativo: correlativoHistoricoFH, anioNumeracion: anioFH, numeroCompleto: numeroCompletoFH,
+            situacionJuridica: SituacionJuridicaRes.VIGENTE, estadoDocumental: EstadoDocumentalRes.FIRMADO, origen: OrigenResolucion.HISTORICO, fechaEmision: fechaEmisionFH, nombreDecanoSnapshot, inicialesOperador,
+            datosEspecificos: {
+              origen: 'HISTORICO',
+              fechaSustentacion: dto.resolucionFechaHora.fechaSustentacion ?? null,
+              horaSustentacion: dto.resolucionFechaHora.horaSustentacion?.trim() ?? null,
+              modalidadSustentacion: dto.resolucionFechaHora.modalidadSustentacion?.trim() ?? null,
+              lugarSustentacion: dto.resolucionFechaHora.lugarSustentacion?.trim() ?? null,
+            },
+            idTramiteControl: idTramiteFH, versionPdf: 1, hashVersionGenerado: hashFH, usuarioEmisorId: usuarioId,
+          },
+        });
+        fechaHoraResolucionId = resolucionFechaHora.id;
+      }
+
+      if (asesorResolucionId || dictaminantesResolucionId || inscripcionResolucionId || fechaHoraResolucionId) {
         await tx.expediente.update({
           where: { id: expediente.id },
-          data: { asesorResolucionId, asesorDocenteId, dictaminantesResolucionId, tituloResolucionId, dictaminante1Id, dictaminante2Id },
+          data: {
+            asesorResolucionId,
+            asesorDocenteId,
+            dictaminantesResolucionId,
+            tituloResolucionId,
+            dictaminante1Id,
+            dictaminante2Id,
+            dictaminante3Id,
+            inscripcionResolucionId,
+            fechaHoraResolucionId,
+          },
         });
       }
 

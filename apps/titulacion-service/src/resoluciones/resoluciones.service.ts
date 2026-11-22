@@ -168,6 +168,8 @@ export class ResolucionesService {
         versionPdf: 1,
       });
 
+      const usuarioId = await this.prisma.resolverUsuarioId(usuarioActual, tx);
+
       const nuevaResolucion = await tx.resolucion.create({
         data: {
           expedienteId: expediente.id,
@@ -189,7 +191,7 @@ export class ResolucionesService {
           versionPdf: 1,
           hashVersionGenerado,
           pdfGeneradoPath,
-          usuarioEmisorId: usuarioActual.sub,
+          usuarioEmisorId: usuarioId,
         },
       });
 
