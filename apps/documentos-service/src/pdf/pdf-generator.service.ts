@@ -17,9 +17,14 @@ interface SegmentoTexto {
   cursiva?: boolean;
 }
 
-interface PalabraToken {
-  palabra: string;
+interface FragmentoPalabra {
+  texto: string;
   font: PDFFont;
+  ancho: number;
+}
+
+interface PalabraToken {
+  fragmentos: FragmentoPalabra[];
   ancho: number;
 }
 
@@ -63,9 +68,9 @@ export class PdfGeneratorService {
   private readonly pageWidth = 595.28;
   private readonly pageHeight = 841.89;
   private readonly marginLeft = 62;
-  private readonly marginRight = 58;
-  private readonly marginTop = 0;
-  private readonly marginBottom = 68;
+  private readonly marginRight = 62;
+  private readonly marginTop = 62;
+  private readonly marginBottom = 78;
   private readonly contentWidth =
     this.pageWidth - this.marginLeft - this.marginRight;
 
@@ -113,17 +118,36 @@ export class PdfGeneratorService {
         const fontkit = require('@pdf-lib/fontkit');
         pdfDoc.registerFontkit(fontkit);
 
+        // Desactivar ligaduras OpenType (ti, tt, fi, fl) y activar subsetting:
+        // evita el bug de pdf-lib/fontkit donde las ligaduras de Calibri quedan sin ancho en /W y superponen letras.
+        const embedOpts = {
+          subset: true,
+          features: {
+            liga: false,
+            calt: false,
+            clig: false,
+            dlig: false,
+            rlig: false,
+          },
+        };
+
         const fontRegular = await pdfDoc.embedFont(
           fs.readFileSync(calibriRegPath),
+          embedOpts,
         );
         const fontBold = await pdfDoc.embedFont(
           fs.readFileSync(calibriBoldPath),
+          embedOpts,
         );
         const fontItalic = await pdfDoc.embedFont(
           fs.readFileSync(calibriItalicPath),
+          embedOpts,
         );
         const fontBoldItalic = fs.existsSync(calibriBoldItalicPath)
-          ? await pdfDoc.embedFont(fs.readFileSync(calibriBoldItalicPath))
+          ? await pdfDoc.embedFont(
+              fs.readFileSync(calibriBoldItalicPath),
+              embedOpts,
+            )
           : fontBold;
 
         return {
@@ -158,19 +182,30 @@ export class PdfGeneratorService {
   }
 
   private construirEscala(bodySize: number): EscalaTipografica {
-    const ratio = bodySize / 10;
+    const ratio = bodySize / 9.6;
+    // Al compactar para ajustar a 1 página, también ajustamos suavemente interlineado y espacios sin perder legibilidad
+    const lineHeightFactor = Math.max(1.14, 1.24 - (9.6 - bodySize) * 0.042);
     return {
       bodySize,
-      lineHeight: Number((bodySize * 1.22).toFixed(2)),
-      paragraphSpacing: Math.max(4, Math.round(6 * ratio)),
-      headerUniSize: Number((12 * ratio).toFixed(2)),
-      headerFacSize: Number((11 * ratio).toFixed(2)),
-      titleResSize: Number((11 * ratio).toFixed(2)),
-      signatureBlockHeight: Math.round(65 * ratio),
-      closingSpacing: Math.max(12, Math.round(18 * ratio)),
-      firstLineIndent: Math.round(35 * ratio),
-      articleLabelWidth: Math.round(78 * ratio),
+      lineHeight: Number((bodySize * lineHeightFactor).toFixed(2)),
+      paragraphSpacing: Math.max(2.6, Number((5.2 * Math.pow(ratio, 1.45)).toFixed(2))),
+      headerUniSize: Number((11.6 * ratio).toFixed(2)),
+      headerFacSize: Number((10.6 * ratio).toFixed(2)),
+      titleResSize: Number((10.6 * ratio).toFixed(2)),
+      signatureBlockHeight: Math.round(74 * ratio),
+      closingSpacing: Math.max(8, Math.round(13 * ratio)),
+      firstLineIndent: Math.round(30 * ratio),
+      articleLabelWidth: Math.round(74 * ratio),
     };
+  }
+
+  private sanitizarFragmentoPreservandoEspacios(texto: string): string {
+    if (!texto) return '';
+    return texto
+      .replace(/[“”«»]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .replace(/[–—]/g, '-')
+      .replace(/…/g, '...');
   }
 
   private parsearTextoConFormato(
@@ -178,9 +213,9 @@ export class PdfGeneratorService {
     cursivaBase = false,
   ): SegmentoTexto[] {
     if (!texto) return [];
-    const partes = texto.split(/(\*\*.*?\*\*)/g).filter(Boolean);
+    const partes = texto.split(/(\*\*[\s\S]*?\*\*)/g).filter(Boolean);
     return partes.map((parte) => {
-      if (parte.startsWith('**') && parte.endsWith('**')) {
+      if (parte.startsWith('**') && parte.endsWith('**') && parte.length >= 4) {
         return {
           texto: parte.slice(2, -2),
           negrita: true,
@@ -195,38 +230,115 @@ export class PdfGeneratorService {
     });
   }
 
+  private dividirPalabraMuyLarga(
+    token: PalabraToken,
+    size: number,
+    limiteAncho: number,
+  ): PalabraToken[] {
+    if (token.ancho <= limiteAncho || limiteAncho <= 20) return [token];
+
+    const partes: PalabraToken[] = [];
+    let actual: FragmentoPalabra[] = [];
+    let anchoActual = 0;
+
+    for (const frag of token.fragmentos) {
+      let buffer = '';
+      for (const ch of frag.texto) {
+        const candidato = buffer + ch;
+        const anchoCandidato = frag.font.widthOfTextAtSize(candidato, size);
+        if (
+          anchoActual + anchoCandidato > limiteAncho &&
+          (actual.length > 0 || buffer.length > 0)
+        ) {
+          if (buffer.length > 0) {
+            const anchoBuf = frag.font.widthOfTextAtSize(buffer, size);
+            actual.push({ texto: buffer, font: frag.font, ancho: anchoBuf });
+            anchoActual += anchoBuf;
+          }
+          partes.push({ fragmentos: actual, ancho: anchoActual });
+          actual = [];
+          anchoActual = 0;
+          buffer = ch;
+        } else {
+          buffer = candidato;
+        }
+      }
+      if (buffer.length > 0) {
+        const anchoBuf = frag.font.widthOfTextAtSize(buffer, size);
+        actual.push({ texto: buffer, font: frag.font, ancho: anchoBuf });
+        anchoActual += anchoBuf;
+      }
+    }
+
+    if (actual.length > 0) {
+      partes.push({ fragmentos: actual, ancho: anchoActual });
+    }
+    return partes.length > 0 ? partes : [token];
+  }
+
   private envolverSegmentosEnLineas(
     segmentos: SegmentoTexto[],
     size: number,
     fontRegular: PDFFont,
     fontBold: PDFFont,
     fontItalic: PDFFont,
+    fontBoldItalic: PDFFont,
     anchoMaximoBloque: number,
     sangriaPrimeraLinea = 0,
   ): PalabraToken[][][] {
     const bloquesDeLinea: PalabraToken[][] = [[]];
+    let palabraActual: FragmentoPalabra[] = [];
+    let anchoPalabraActual = 0;
+
+    const cerrarPalabraActual = () => {
+      if (palabraActual.length > 0) {
+        bloquesDeLinea[bloquesDeLinea.length - 1].push({
+          fragmentos: palabraActual,
+          ancho: anchoPalabraActual,
+        });
+        palabraActual = [];
+        anchoPalabraActual = 0;
+      }
+    };
 
     for (const seg of segmentos) {
-      const font = seg.negrita
-        ? fontBold
-        : seg.cursiva
-          ? fontItalic
-          : fontRegular;
-      const limpio = this.templatesService.sanitizarTextoWinAnsi(seg.texto);
-      const subLineas = limpio.split('\n');
+      const font =
+        seg.negrita && seg.cursiva
+          ? fontBoldItalic
+          : seg.negrita
+            ? fontBold
+            : seg.cursiva
+              ? fontItalic
+              : fontRegular;
+
+      // Dividir en saltos de línea ANTES de sanitizar para preservar \n reales (Jurado, DICE/DEBE DECIR)
+      const subLineas = seg.texto.split(/\r?\n/);
 
       subLineas.forEach((subLinea, idxSub) => {
-        if (idxSub > 0) bloquesDeLinea.push([]);
-        const palabras = subLinea.trim().split(/\s+/).filter(Boolean);
-        for (const palabra of palabras) {
-          bloquesDeLinea[bloquesDeLinea.length - 1].push({
-            palabra,
-            font,
-            ancho: font.widthOfTextAtSize(palabra, size),
-          });
+        if (idxSub > 0) {
+          cerrarPalabraActual();
+          bloquesDeLinea.push([]);
+        }
+        const limpia = this.sanitizarFragmentoPreservandoEspacios(subLinea);
+        const piezas = limpia.split(/([ \t]+)/);
+
+        for (const pieza of piezas) {
+          if (!pieza) continue;
+          if (/^[ \t]+$/.test(pieza)) {
+            cerrarPalabraActual();
+          } else {
+            const anchoPieza = font.widthOfTextAtSize(pieza, size);
+            palabraActual.push({
+              texto: pieza,
+              font,
+              ancho: anchoPieza,
+            });
+            anchoPalabraActual += anchoPieza;
+          }
         }
       });
     }
+    cerrarPalabraActual();
 
     const anchoEspacioBase = fontRegular.widthOfTextAtSize(' ', size);
     const resultadoPorBloque: PalabraToken[][][] = [];
@@ -241,27 +353,46 @@ export class PdfGeneratorService {
       let lineaActual: PalabraToken[] = [];
       let anchoAcumulado = 0;
 
-      for (const token of bloquePalabras) {
+      for (const tokenOriginal of bloquePalabras) {
         const esPrimeraLinea = lineasEnvueltas.length === 0;
-        const limiteAnchoActual = esPrimeraLinea
-          ? anchoMaximoBloque - sangriaPrimeraLinea
-          : anchoMaximoBloque;
+        const limiteAnchoActual = Math.max(
+          40,
+          esPrimeraLinea
+            ? anchoMaximoBloque - sangriaPrimeraLinea
+            : anchoMaximoBloque,
+        );
 
-        const espacioNecesario =
-          lineaActual.length === 0
-            ? token.ancho
-            : anchoEspacioBase + token.ancho;
+        const subTokens = this.dividirPalabraMuyLarga(
+          tokenOriginal,
+          size,
+          limiteAnchoActual,
+        );
 
-        if (
-          anchoAcumulado + espacioNecesario <= limiteAnchoActual ||
-          lineaActual.length === 0
-        ) {
-          lineaActual.push(token);
-          anchoAcumulado += espacioNecesario;
-        } else {
-          lineasEnvueltas.push(lineaActual);
-          lineaActual = [token];
-          anchoAcumulado = token.ancho;
+        for (const token of subTokens) {
+          const esPrimera = lineasEnvueltas.length === 0;
+          const limiteActual = Math.max(
+            40,
+            esPrimera
+              ? anchoMaximoBloque - sangriaPrimeraLinea
+              : anchoMaximoBloque,
+          );
+
+          const espacioNecesario =
+            lineaActual.length === 0
+              ? token.ancho
+              : anchoEspacioBase + token.ancho;
+
+          if (
+            anchoAcumulado + espacioNecesario <= limiteActual ||
+            lineaActual.length === 0
+          ) {
+            lineaActual.push(token);
+            anchoAcumulado += espacioNecesario;
+          } else {
+            lineasEnvueltas.push(lineaActual);
+            lineaActual = [token];
+            anchoAcumulado = token.ancho;
+          }
         }
       }
 
@@ -336,343 +467,35 @@ export class PdfGeneratorService {
       );
     }
 
-    const escala = this.construirEscala(9.8);
-
-    const paginas: PDFPage[] = [];
-    let paginaActual = pdfDoc.addPage([this.pageWidth, this.pageHeight]);
-    paginas.push(paginaActual);
-    let cursorY = this.pageHeight - this.marginTop;
-
-    const verificarEspacioOSaltarPagina = (altoRequerido: number) => {
-      if (cursorY - altoRequerido < this.marginBottom) {
-        paginaActual = pdfDoc.addPage([this.pageWidth, this.pageHeight]);
-        paginas.push(paginaActual);
-        cursorY = this.pageHeight - 45;
+    let footerImage: any = null;
+    let footerImageHeight = 0;
+    try {
+      footerImage = await this.cargarImagen(pdfDoc, this.footerImagePath);
+      if (footerImage) {
+        const imgDims = footerImage.scale(1);
+        const imgWidth = this.pageWidth;
+        footerImageHeight = (imgDims.height / imgDims.width) * imgWidth;
       }
-    };
-
-      const dibujarTextoCentrado = (
-      texto: string,
-      font: PDFFont,
-      size: number,
-      espacioInferior: number,
-      subrayado = false,
-      color: any = rgb(0.05, 0.05, 0.05), // <-- NUEVO PARÁMETRO DE COLOR
-    ) => {
-      const textoLimpio = this.templatesService
-        .sanitizarTextoWinAnsi(texto)
-        .replace(/\s+/g, ' ')
-        .trim();
-      verificarEspacioOSaltarPagina(size + espacioInferior);
-      const textWidth = font.widthOfTextAtSize(textoLimpio, size);
-      const x = this.marginLeft + (this.contentWidth - textWidth) / 2;
-
-      paginaActual.drawText(textoLimpio, {
-        x,
-        y: cursorY,
-        size,
-        font,
-        color, // <-- Usamos el color aquí
-      });
-      if (subrayado) {
-        paginaActual.drawLine({
-          start: { x, y: cursorY - 1.8 },
-          end: { x: x + textWidth, y: cursorY - 1.8 },
-          thickness: 0.75,
-          color: color, // <-- El subrayado también toma el color
-        });
-      }
-      cursorY -= size + espacioInferior;
-    };
-
-    const dibujarTextoIzquierda = (
-      texto: string,
-      font: PDFFont,
-      size: number,
-      espacioInferior: number,
-    ) => {
-      const textoLimpio = this.templatesService
-        .sanitizarTextoWinAnsi(texto)
-        .replace(/\s+/g, ' ')
-        .trim();
-      verificarEspacioOSaltarPagina(size + espacioInferior);
-      paginaActual.drawText(textoLimpio, {
-        x: this.marginLeft,
-        y: cursorY,
-        size,
-        font,
-        color: rgb(0.05, 0.05, 0.05),
-      });
-      cursorY -= size + espacioInferior;
-    };
-
-    const dibujarTextoDerecha = (
-      texto: string,
-      font: PDFFont,
-      size: number,
-      espacioInferior: number,
-    ) => {
-      const textoLimpio = this.templatesService
-        .sanitizarTextoWinAnsi(texto)
-        .replace(/\s+/g, ' ')
-        .trim();
-      verificarEspacioOSaltarPagina(size + espacioInferior);
-      const textWidth = font.widthOfTextAtSize(textoLimpio, size);
-      const x = this.pageWidth - this.marginRight - textWidth;
-      paginaActual.drawText(textoLimpio, {
-        x,
-        y: cursorY,
-        size,
-        font,
-        color: rgb(0.05, 0.05, 0.05),
-      });
-      cursorY -= size + espacioInferior;
-    };
-
-    const dibujarParrafoCompuesto = (
-      segmentos: SegmentoTexto[],
-      opciones?: {
-        size?: number;
-        lineHeight?: number;
-        espacioInferior?: number;
-        justificar?: boolean;
-        sangriaPrimeraLinea?: number;
-        offsetIzquierdo?: number;
-        etiquetaColumnaIzquierda?: string;
-      },
-    ) => {
-      const size = opciones?.size ?? escala.bodySize;
-      const lineHeight = opciones?.lineHeight ?? escala.lineHeight;
-      const espacioInferior =
-        opciones?.espacioInferior ?? escala.paragraphSpacing;
-      const justificar = opciones?.justificar ?? true;
-      const sangriaPrimeraLinea = opciones?.sangriaPrimeraLinea ?? 0;
-      const offsetIzquierdo = opciones?.offsetIzquierdo ?? 0;
-      const etiquetaIzquierda = opciones?.etiquetaColumnaIzquierda;
-
-      const anchoDisponibleBloque = this.contentWidth - offsetIzquierdo;
-      const bloquesEnvueltos = this.envolverSegmentosEnLineas(
-        segmentos,
-        size,
-        fontRegular,
-        fontBold,
-        fontItalic,
-        anchoDisponibleBloque,
-        sangriaPrimeraLinea,
+    } catch (error: any) {
+      console.error(
+        '❌ Error al cargar la imagen del pie de página:',
+        error.message,
       );
-      const anchoEspacioBase = fontRegular.widthOfTextAtSize(' ', size);
-
-      let etiquetaDibujada = false;
-
-      for (const lineasEnvueltas of bloquesEnvueltos) {
-        if (lineasEnvueltas.length === 0) {
-          cursorY -= lineHeight * 0.5;
-          continue;
-        }
-
-        lineasEnvueltas.forEach((linea, idxLinea) => {
-          verificarEspacioOSaltarPagina(lineHeight);
-
-                    if (etiquetaIzquierda && !etiquetaDibujada && idxLinea === 0) {
-            const etiquetaLimpia =
-              this.templatesService.sanitizarTextoWinAnsi(etiquetaIzquierda);
-            paginaActual.drawText(etiquetaLimpia, {
-              x: this.marginLeft,
-              y: cursorY,
-              size,
-              font: fontBold,
-              color: rgb(0.05, 0.05, 0.05),
-            });
-
-            // SUBRAYADO PARA PRIMERO, SEGUNDO, TERCERO...
-            const labelWidth = fontBold.widthOfTextAtSize(etiquetaLimpia, size);
-            paginaActual.drawLine({
-              start: { x: this.marginLeft, y: cursorY - 1.5 },
-              end: { x: this.marginLeft + labelWidth, y: cursorY - 1.5 },
-              thickness: 0.75,
-              color: rgb(0.05, 0.05, 0.05),
-            });
-
-            etiquetaDibujada = true;
-          }
-
-          const esPrimeraLineaDelBloque = idxLinea === 0;
-          const esUltimaLineaDelBloque =
-            idxLinea === lineasEnvueltas.length - 1;
-          const sangriaLineaActual = esPrimeraLineaDelBloque
-            ? sangriaPrimeraLinea
-            : 0;
-          const anchoLineaMax = anchoDisponibleBloque - sangriaLineaActual;
-
-          const totalAnchoPalabras = linea.reduce((acc, t) => acc + t.ancho, 0);
-          let espacioEntrePalabras = anchoEspacioBase;
-          if (justificar && !esUltimaLineaDelBloque && linea.length > 1) {
-            const espacioDisponible = anchoLineaMax - totalAnchoPalabras;
-            const espacioCalculado = espacioDisponible / (linea.length - 1);
-            
-            if (espacioCalculado > anchoEspacioBase) {
-              espacioEntrePalabras = Math.min(espacioCalculado, anchoEspacioBase * 3.5);
-            } else {
-              espacioEntrePalabras = anchoEspacioBase;
-            }
-          }
-
-          let x = this.marginLeft + offsetIzquierdo + sangriaLineaActual;
-          for (const token of linea) {
-            paginaActual.drawText(token.palabra, {
-              x,
-              y: cursorY,
-              size,
-              font: token.font,
-              color: rgb(0.05, 0.05, 0.05),
-            });
-            x += token.ancho + espacioEntrePalabras;
-          }
-          cursorY -= lineHeight;
-        });
-      }
-      cursorY -= espacioInferior;
-    };
-
-        // 1. DIBUJAR ENCABEZADO Y SIEMPRE IMPRIMIR FACULTAD DEBAJO
-    if (headerImage) {
-      paginaActual.drawImage(headerImage, {
-        x: 0,
-        y: cursorY - headerImageHeight,
-        width: this.pageWidth,
-        height: headerImageHeight,
-      });
-      cursorY -= headerImageHeight + 12;
-    } else {
-      dibujarTextoCentrado(universidad, fontBold, escala.headerUniSize, 4);
     }
 
-    // AQUÍ ESTÁ EL CAMBIO: Le sumamos +2 al tamaño, color celeste y sin subrayado (false)
-    dibujarTextoCentrado(
-      facultad,
-      fontBold,
-      escala.headerFacSize + 3.5,
-      8,
-      false,
-      rgb(0.1, 0.45, 0.75),
+    // Margen inferior real garantizando separación limpia sobre el pie de página
+    const margenInferiorSeguro = Math.max(
+      this.marginBottom,
+      Math.ceil(footerImageHeight) + 12,
     );
 
-    // 2. TÍTULO DE LA RESOLUCIÓN (CON SUBRAYADO Y MÁS GRANDE) Y FECHA
     const serieTexto = resolucion.serie === SerieNumeracion.CF ? ' - CF' : '';
     const tituloResolucionTexto = `RESOLUCIÓN Nº ${resolucion.numeroCorrelativo} - ${resolucion.anioNumeracion}${serieTexto} - FCSa - UAC`;
-    
-    dibujarTextoCentrado(
-      tituloResolucionTexto,
-      fontBold,
-      escala.titleResSize + 4,
-      10,
-      true, // Subrayado en true
-    );
-
-    // Fecha en Negrita y más grande
-    dibujarTextoDerecha(
-      `${ciudad}, ${this.templatesService.formatearFechaLargaCastellano(resolucion.fechaEmision)}`,
-      fontBold,
-      escala.bodySize + 1.5, // <-- AUMENTADO
-      10,
-    );
-
-    // Línea de autoridad (EL DECANO...) más grande
-    dibujarTextoIzquierda(
-      'EL DECANO DE LA FACULTAD DE CIENCIAS DE LA SALUD DE LA UNIVERSIDAD ANDINA DEL CUSCO:',
-      fontBold,
-      escala.bodySize + 1.5, // <-- AUMENTADO
-      10,
-    );
-
-    // FUNCIÓN AUXILIAR PARA DIBUJAR TÍTULOS DE SECCIÓN
-    const dibujarTituloSeccion = (texto: string) => {
-      const textoLimpio = this.templatesService.sanitizarTextoWinAnsi(texto);
-      const fontSize = escala.bodySize + 1.5; // <-- AUMENTADO AQUÍ
-      
-      verificarEspacioOSaltarPagina(fontSize + 4);
-      const x = this.marginLeft + escala.firstLineIndent; 
-      const textWidth = fontBold.widthOfTextAtSize(textoLimpio, fontSize);
-
-      paginaActual.drawText(textoLimpio, {
-        x,
-        y: cursorY,
-        size: fontSize,
-        font: fontBold,
-        color: rgb(0.05, 0.05, 0.05),
-      });
-
-      paginaActual.drawLine({
-        start: { x, y: cursorY - 1.5 },
-        end: { x: x + textWidth, y: cursorY - 1.5 },
-        thickness: 0.75,
-        color: rgb(0.05, 0.05, 0.05),
-      });
-
-      cursorY -= fontSize + 4;
-    };
-
-    // 4. SECCIÓN VISTO
-    dibujarTituloSeccion('VISTO:');
-    dibujarParrafoCompuesto(this.parsearTextoConFormato(secciones.visto), {
-      sangriaPrimeraLinea: escala.firstLineIndent,
-    });
-
-    cursorY -= 8; // <-- ESPACIO EXTRA ANTES DE CONSIDERANDO
-
-    // 5. SECCIÓN CONSIDERANDO
-    dibujarTituloSeccion('CONSIDERANDO:');
-    for (const parrafo of secciones.considerando) {
-      dibujarParrafoCompuesto(this.parsearTextoConFormato(parrafo), {
-        sangriaPrimeraLinea: escala.firstLineIndent,
-      });
-    }
-
-    cursorY -= 8; // <-- ESPACIO EXTRA ANTES DE RESUELVE
-
-    // 6. SECCIÓN RESUELVE
-    dibujarTituloSeccion('RESUELVE:');
-    for (const art of secciones.articulosResolutivos) {
-      dibujarParrafoCompuesto(this.parsearTextoConFormato(art.texto), {
-        offsetIzquierdo: escala.articleLabelWidth,
-        etiquetaColumnaIzquierda: art.titulo,
-      });
-    }
-
-    // 7. CIERRE Y BLOQUE DE DISTRIBUCIÓN
-    verificarEspacioOSaltarPagina(escala.signatureBlockHeight);
-    cursorY -= 8; // <-- REDUCIDO: Más pegado al artículo anterior (CUARTO)
-
-    // A) "Regístrese, Comuníquese y Archívese."
-    const fontSizeReg = escala.bodySize + 0.5; // Tamaño base (ej. 10.3 pt)
-    const textoRegistrese = 'Regístrese, Comuníquese y Archívese. ';
-    
-    paginaActual.drawText(this.templatesService.sanitizarTextoWinAnsi(textoRegistrese), {
-      x: this.marginLeft,
-      y: cursorY,
-      size: fontSizeReg,
-      font: fontBold,
-      color: rgb(0.05, 0.05, 0.05),
-    });
-
-    const anchoTextoReg = fontBold.widthOfTextAtSize(textoRegistrese, fontSizeReg);
-    const anchoGuionConEspacio = fontBold.widthOfTextAtSize('- ', fontSizeReg);
-    const anchoDisponible = this.contentWidth - anchoTextoReg;
-    const cantidadGuiones = Math.floor(anchoDisponible / anchoGuionConEspacio);
-    
-    paginaActual.drawText('- '.repeat(cantidadGuiones), {
-      x: this.marginLeft + anchoTextoReg,
-      y: cursorY,
-      size: fontSizeReg,
-      font: fontBold,
-      color: rgb(0.05, 0.05, 0.05),
-    });
-
-    // B) Bloque de iniciales y distribución
-    cursorY -= 11; // Queda justo debajo, sin el espacio en blanco
+    const fechaEmisionFormateada = `${ciudad}, ${this.templatesService.formatearFechaLargaCastellano(resolucion.fechaEmision)}`;
     const inicialesDecano = (inicialesDecanoVigente || 'JAAFD').toUpperCase();
-    const inicialesOperador = (resolucion.inicialesOperador || 'avc').toLowerCase();
-
+    const inicialesOperador = (
+      resolucion.inicialesOperador || 'avc'
+    ).toLowerCase();
     const lineasDistribucion = [
       `FCSa/ ${inicialesDecano}/${inicialesOperador}`,
       'Interesado (a)',
@@ -682,48 +505,464 @@ export class PdfGeneratorService {
       'Archivo (1).',
     ];
 
-    // Usamos forEach con índice para diferenciar la primera línea del resto
-    lineasDistribucion.forEach((lineaDist, index) => {
-      paginaActual.drawText(
-        this.templatesService.sanitizarTextoWinAnsi(lineaDist),
+    const paginas: PDFPage[] = [];
+
+    // Motor unificado de maquetación: permite simular (dibujar = false) con matemática 100% exacta
+    // para ajustar automáticamente a 1 sola página A4 cuando sea legible, y luego dibujar (dibujar = true).
+    const renderizarDocumento = (bodySize: number, dibujar: boolean): number => {
+      const escala = this.construirEscala(bodySize);
+      const ratio = bodySize / 9.6;
+      const gapSeccion = Math.max(2, Number((4 * ratio).toFixed(2)));
+      const gapEncabezadoP1 = Math.max(17, Math.round(22 * ratio));
+      const gapEncabezadoP2 = Math.max(22, Math.round(26 * ratio));
+
+      let numPaginas = 0;
+      const estado: { paginaActual: PDFPage | null } = { paginaActual: null };
+
+      const iniciarPagina = (esPrimeraPagina: boolean): number => {
+        numPaginas += 1;
+        if (dibujar) {
+          const nuevaPagina = pdfDoc.addPage([this.pageWidth, this.pageHeight]);
+          estado.paginaActual = nuevaPagina;
+          paginas.push(nuevaPagina);
+          if (headerImage) {
+            nuevaPagina.drawImage(headerImage, {
+              x: 0,
+              y: this.pageHeight - headerImageHeight,
+              width: this.pageWidth,
+              height: headerImageHeight,
+            });
+          }
+        }
+        if (headerImage) {
+          const separacionSuperior = esPrimeraPagina
+            ? gapEncabezadoP1
+            : gapEncabezadoP2;
+          return this.pageHeight - headerImageHeight - separacionSuperior;
+        }
+        return this.pageHeight - this.marginTop;
+      };
+
+      let cursorY = iniciarPagina(true);
+
+      const verificarEspacioOSaltarPagina = (altoRequerido: number) => {
+        if (cursorY - altoRequerido < margenInferiorSeguro) {
+          cursorY = iniciarPagina(false);
+        }
+      };
+
+      const dibujarTextoCentrado = (
+        texto: string,
+        font: PDFFont,
+        size: number,
+        espacioInferior: number,
+        subrayado = false,
+        color: any = rgb(0.05, 0.05, 0.05),
+      ) => {
+        const textoLimpio = this.templatesService
+          .sanitizarTextoWinAnsi(texto)
+          .replace(/\s+/g, ' ')
+          .trim();
+        let sizeEfectivo = size;
+        let textWidth = font.widthOfTextAtSize(textoLimpio, sizeEfectivo);
+        if (textWidth > this.contentWidth && textWidth > 0) {
+          sizeEfectivo = Number(
+            ((sizeEfectivo * this.contentWidth) / textWidth).toFixed(2),
+          );
+          textWidth = font.widthOfTextAtSize(textoLimpio, sizeEfectivo);
+        }
+
+        verificarEspacioOSaltarPagina(sizeEfectivo + espacioInferior);
+        if (dibujar && estado.paginaActual) {
+          const x = this.marginLeft + (this.contentWidth - textWidth) / 2;
+          estado.paginaActual.drawText(textoLimpio, {
+            x,
+            y: cursorY,
+            size: sizeEfectivo,
+            font,
+            color,
+          });
+          if (subrayado) {
+            estado.paginaActual.drawLine({
+              start: { x, y: cursorY - 2 },
+              end: { x: x + textWidth, y: cursorY - 2 },
+              thickness: 0.75,
+              color,
+            });
+          }
+        }
+        cursorY -= sizeEfectivo + espacioInferior;
+      };
+
+      const dibujarTextoDerecha = (
+        texto: string,
+        font: PDFFont,
+        size: number,
+        espacioInferior: number,
+      ) => {
+        const textoLimpio = this.templatesService
+          .sanitizarTextoWinAnsi(texto)
+          .replace(/\s+/g, ' ')
+          .trim();
+        verificarEspacioOSaltarPagina(size + espacioInferior);
+        if (dibujar && estado.paginaActual) {
+          const textWidth = font.widthOfTextAtSize(textoLimpio, size);
+          const x = Math.max(
+            this.marginLeft,
+            this.pageWidth - this.marginRight - textWidth,
+          );
+          estado.paginaActual.drawText(textoLimpio, {
+            x,
+            y: cursorY,
+            size,
+            font,
+            color: rgb(0.05, 0.05, 0.05),
+          });
+        }
+        cursorY -= size + espacioInferior;
+      };
+
+      const dibujarParrafoCompuesto = (
+        segmentos: SegmentoTexto[],
+        opciones?: {
+          size?: number;
+          lineHeight?: number;
+          espacioInferior?: number;
+          justificar?: boolean;
+          sangriaPrimeraLinea?: number;
+          offsetIzquierdo?: number;
+          etiquetaColumnaIzquierda?: string;
+        },
+      ) => {
+        const size = opciones?.size ?? escala.bodySize;
+        const lineHeight = opciones?.lineHeight ?? escala.lineHeight;
+        const espacioInferior =
+          opciones?.espacioInferior ?? escala.paragraphSpacing;
+        const justificar = opciones?.justificar ?? true;
+        const sangriaPrimeraLinea = opciones?.sangriaPrimeraLinea ?? 0;
+        const etiquetaIzquierda = opciones?.etiquetaColumnaIzquierda;
+
+        let offsetIzquierdo = opciones?.offsetIzquierdo ?? 0;
+        let etiquetaLimpia = '';
+        let labelWidth = 0;
+        if (etiquetaIzquierda) {
+          etiquetaLimpia =
+            this.templatesService.sanitizarTextoWinAnsi(etiquetaIzquierda);
+          labelWidth = fontBold.widthOfTextAtSize(etiquetaLimpia, size);
+          offsetIzquierdo = Math.max(
+            offsetIzquierdo,
+            Math.ceil(labelWidth + 12),
+          );
+        }
+
+        const anchoDisponibleBloque = this.contentWidth - offsetIzquierdo;
+        const bloquesEnvueltos = this.envolverSegmentosEnLineas(
+          segmentos,
+          size,
+          fontRegular,
+          fontBold,
+          fontItalic,
+          fontBoldItalic,
+          anchoDisponibleBloque,
+          sangriaPrimeraLinea,
+        );
+        const anchoEspacioBase = fontRegular.widthOfTextAtSize(' ', size);
+
+        let etiquetaDibujada = false;
+
+        for (const lineasEnvueltas of bloquesEnvueltos) {
+          if (lineasEnvueltas.length === 0) {
+            cursorY -= lineHeight * 0.5;
+            continue;
+          }
+
+          lineasEnvueltas.forEach((linea, idxLinea) => {
+            verificarEspacioOSaltarPagina(lineHeight);
+
+            if (etiquetaIzquierda && !etiquetaDibujada && idxLinea === 0) {
+              if (dibujar && estado.paginaActual) {
+                estado.paginaActual.drawText(etiquetaLimpia, {
+                  x: this.marginLeft,
+                  y: cursorY,
+                  size,
+                  font: fontBold,
+                  color: rgb(0.05, 0.05, 0.05),
+                });
+
+                estado.paginaActual.drawLine({
+                  start: { x: this.marginLeft, y: cursorY - 1.5 },
+                  end: { x: this.marginLeft + labelWidth, y: cursorY - 1.5 },
+                  thickness: 0.75,
+                  color: rgb(0.05, 0.05, 0.05),
+                });
+              }
+              etiquetaDibujada = true;
+            }
+
+            if (dibujar && estado.paginaActual) {
+              const esPrimeraLineaDelBloque = idxLinea === 0;
+              const esUltimaLineaDelBloque =
+                idxLinea === lineasEnvueltas.length - 1;
+              const sangriaLineaActual = esPrimeraLineaDelBloque
+                ? sangriaPrimeraLinea
+                : 0;
+              const anchoLineaMax = anchoDisponibleBloque - sangriaLineaActual;
+
+              const totalAnchoPalabras = linea.reduce(
+                (acc, t) => acc + t.ancho,
+                0,
+              );
+              let espacioEntrePalabras = anchoEspacioBase;
+              if (justificar && !esUltimaLineaDelBloque && linea.length > 1) {
+                const espacioDisponible = anchoLineaMax - totalAnchoPalabras;
+                const espacioCalculado =
+                  espacioDisponible / (linea.length - 1);
+
+                if (espacioCalculado > anchoEspacioBase) {
+                  espacioEntrePalabras = Math.min(
+                    espacioCalculado,
+                    anchoEspacioBase * 3.0,
+                  );
+                } else {
+                  espacioEntrePalabras = anchoEspacioBase;
+                }
+              }
+
+              let x = this.marginLeft + offsetIzquierdo + sangriaLineaActual;
+              for (const token of linea) {
+                let xFrag = x;
+                for (const frag of token.fragmentos) {
+                  estado.paginaActual.drawText(frag.texto, {
+                    x: xFrag,
+                    y: cursorY,
+                    size,
+                    font: frag.font,
+                    color: rgb(0.05, 0.05, 0.05),
+                  });
+                  xFrag += frag.ancho;
+                }
+                x += token.ancho + espacioEntrePalabras;
+              }
+            }
+            cursorY -= lineHeight;
+          });
+        }
+        cursorY -= espacioInferior;
+      };
+
+      // 1. ENCABEZADO Y FACULTAD DEBAJO
+      if (!headerImage) {
+        dibujarTextoCentrado(
+          universidad,
+          fontBold,
+          escala.headerUniSize,
+          Math.max(3, Math.round(4 * ratio)),
+        );
+      }
+
+      dibujarTextoCentrado(
+        facultad,
+        fontBold,
+        Number((escala.headerFacSize + 3.0 * ratio).toFixed(2)),
+        Math.max(5, Number((8.5 * ratio).toFixed(2))),
+        false,
+        rgb(0.1, 0.45, 0.75),
+      );
+
+      // 2. TÍTULO DE LA RESOLUCIÓN Y FECHA
+      dibujarTextoCentrado(
+        tituloResolucionTexto,
+        fontBold,
+        Number((escala.titleResSize + 3.2 * ratio).toFixed(2)),
+        Math.max(6, Number((10 * ratio).toFixed(2))),
+        true,
+      );
+
+      dibujarTextoDerecha(
+        fechaEmisionFormateada,
+        fontBold,
+        Number((escala.bodySize + 0.9 * ratio).toFixed(2)),
+        Math.max(5, Number((9 * ratio).toFixed(2))),
+      );
+
+      // Línea de autoridad
+      dibujarParrafoCompuesto(
+        [
+          {
+            texto:
+              'EL DECANO DE LA FACULTAD DE CIENCIAS DE LA SALUD DE LA UNIVERSIDAD ANDINA DEL CUSCO:',
+            negrita: true,
+          },
+        ],
         {
-          x: this.marginLeft,
-          y: cursorY,
-          size: index === 0 ? 8.6 : 7.5, // <-- Si es la primera línea (FCSa) es 8.6, si es el resto es 7.5
-          font: fontBold, 
-          color: rgb(0.05, 0.05, 0.05),
+          size: Number((escala.bodySize + 0.7 * ratio).toFixed(2)),
+          lineHeight: Number(
+            ((escala.bodySize + 0.7 * ratio) * 1.24).toFixed(2),
+          ),
+          espacioInferior: Math.max(5, Number((8 * ratio).toFixed(2))),
+          justificar: false,
         },
       );
-      // El primer salto de línea es un poco más grande para separar las iniciales del resto
-      cursorY -= index === 0 ? 10 : 8.5; 
-    });
+
+      // FUNCIÓN AUXILIAR PARA TÍTULOS DE SECCIÓN
+      const dibujarTituloSeccion = (texto: string) => {
+        const textoLimpio = this.templatesService.sanitizarTextoWinAnsi(texto);
+        const fontSize = Number((escala.bodySize + 1.1 * ratio).toFixed(2));
+        const espacioPostTitulo = Math.max(3, Number((4.5 * ratio).toFixed(2)));
+
+        verificarEspacioOSaltarPagina(
+          fontSize + espacioPostTitulo + escala.lineHeight * 2,
+        );
+        if (dibujar && estado.paginaActual) {
+          const x = this.marginLeft + escala.firstLineIndent;
+          const textWidth = fontBold.widthOfTextAtSize(textoLimpio, fontSize);
+
+          estado.paginaActual.drawText(textoLimpio, {
+            x,
+            y: cursorY,
+            size: fontSize,
+            font: fontBold,
+            color: rgb(0.05, 0.05, 0.05),
+          });
+
+          estado.paginaActual.drawLine({
+            start: { x, y: cursorY - 1.5 },
+            end: { x: x + textWidth, y: cursorY - 1.5 },
+            thickness: 0.75,
+            color: rgb(0.05, 0.05, 0.05),
+          });
+        }
+
+        cursorY -= fontSize + espacioPostTitulo;
+      };
+
+      // 4. SECCIÓN VISTO
+      dibujarTituloSeccion('VISTO:');
+      dibujarParrafoCompuesto(this.parsearTextoConFormato(secciones.visto), {
+        sangriaPrimeraLinea: escala.firstLineIndent,
+      });
+
+      cursorY -= gapSeccion;
+
+      // 5. SECCIÓN CONSIDERANDO
+      dibujarTituloSeccion('CONSIDERANDO:');
+      for (const parrafo of secciones.considerando) {
+        dibujarParrafoCompuesto(this.parsearTextoConFormato(parrafo), {
+          sangriaPrimeraLinea: escala.firstLineIndent,
+        });
+      }
+
+      cursorY -= gapSeccion;
+
+      // 6. SECCIÓN RESUELVE
+      dibujarTituloSeccion('RESUELVE:');
+      for (const art of secciones.articulosResolutivos) {
+        dibujarParrafoCompuesto(this.parsearTextoConFormato(art.texto), {
+          offsetIzquierdo: escala.articleLabelWidth,
+          etiquetaColumnaIzquierda: art.titulo,
+        });
+      }
+
+      // 7. CIERRE Y BLOQUE DE DISTRIBUCIÓN
+      const pasoIniciales = Math.max(8, Number((10 * ratio).toFixed(2)));
+      const pasoDist = Math.max(7, Number((8.4 * ratio).toFixed(2)));
+      const saltoPostReg = Math.max(9, Number((11 * ratio).toFixed(2)));
+      const alturaBloqueCierre =
+        gapSeccion + saltoPostReg + pasoIniciales + 5 * pasoDist + 4;
+      verificarEspacioOSaltarPagina(alturaBloqueCierre);
+      cursorY -= gapSeccion;
+
+      const fontSizeReg = Number((escala.bodySize + 0.4 * ratio).toFixed(2));
+      const textoRegistrese = 'Regístrese, Comuníquese y Archívese. ';
+
+      if (dibujar && estado.paginaActual) {
+        estado.paginaActual.drawText(
+          this.templatesService.sanitizarTextoWinAnsi(textoRegistrese),
+          {
+            x: this.marginLeft,
+            y: cursorY,
+            size: fontSizeReg,
+            font: fontBold,
+            color: rgb(0.05, 0.05, 0.05),
+          },
+        );
+
+        const anchoTextoReg = fontBold.widthOfTextAtSize(
+          textoRegistrese,
+          fontSizeReg,
+        );
+        const anchoGuionConEspacio = fontBold.widthOfTextAtSize(
+          '- ',
+          fontSizeReg,
+        );
+        const anchoDisponible = this.contentWidth - anchoTextoReg;
+        const cantidadGuiones = Math.max(
+          0,
+          Math.floor(anchoDisponible / anchoGuionConEspacio),
+        );
+
+        if (cantidadGuiones > 0) {
+          estado.paginaActual.drawText('- '.repeat(cantidadGuiones), {
+            x: this.marginLeft + anchoTextoReg,
+            y: cursorY,
+            size: fontSizeReg,
+            font: fontBold,
+            color: rgb(0.05, 0.05, 0.05),
+          });
+        }
+      }
+
+      cursorY -= saltoPostReg;
+
+      const sizeIniciales = Math.max(7.4, Number((8.6 * ratio).toFixed(2)));
+      const sizeDist = Math.max(6.6, Number((7.5 * ratio).toFixed(2)));
+
+      lineasDistribucion.forEach((lineaDist, index) => {
+        if (dibujar && estado.paginaActual) {
+          estado.paginaActual.drawText(
+            this.templatesService.sanitizarTextoWinAnsi(lineaDist),
+            {
+              x: this.marginLeft,
+              y: cursorY,
+              size: index === 0 ? sizeIniciales : sizeDist,
+              font: fontBold,
+              color: rgb(0.05, 0.05, 0.05),
+            },
+          );
+        }
+        cursorY -= index === 0 ? pasoIniciales : pasoDist;
+      });
+
+      return numPaginas;
+    };
+
+    // AUTO-AJUSTE A 1 SOLA PÁGINA:
+    // Prueba desde tamaño normal (9.6pt) bajando gradualmente hasta el piso legible (7.3pt).
+    // Si aun en 7.3pt no cabe en 1 página (resolución excepcionalmente extensa),
+    // usa 9.2pt en 2 páginas limpias para priorizar la legibilidad.
+    const escalasCandidatas = [9.6, 9.2, 8.8, 8.4, 8.0, 7.6, 7.3];
+    let bodySizeElegido = 9.2;
+    for (const candidato of escalasCandidatas) {
+      if (renderizarDocumento(candidato, false) === 1) {
+        bodySizeElegido = candidato;
+        break;
+      }
+    }
+
+    renderizarDocumento(bodySizeElegido, true);
 
     // 9. PIE DE PÁGINA INSTITUCIONAL Y SELLO 100% INVISIBLE EN (0,0)
     const selloInvisibleLimpio =
       this.templatesService.sanitizarTextoWinAnsi(selloControl);
 
     for (const pag of paginas) {
-      try {
-        const footerImage = await this.cargarImagen(
-          pdfDoc,
-          this.footerImagePath,
-        );
-        if (footerImage) {
-          const imgDims = footerImage.scale(1);
-          const imgWidth = this.pageWidth;
-          const footerImageHeight = (imgDims.height / imgDims.width) * imgWidth;
-          pag.drawImage(footerImage, {
-            x: 0,
-            y: 0,
-            width: imgWidth,
-            height: footerImageHeight,
-          });
-        }
-      } catch (error: any) {
-        console.error(
-          '❌ Error al cargar la imagen del pie de página:',
-          error.message,
-        );
+      if (footerImage) {
+        pag.drawImage(footerImage, {
+          x: 0,
+          y: 0,
+          width: this.pageWidth,
+          height: footerImageHeight,
+        });
       }
 
       pag.drawText(selloInvisibleLimpio, {
