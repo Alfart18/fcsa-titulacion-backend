@@ -23,6 +23,12 @@ export class InstitucionalController {
   constructor(private readonly institucionalService: InstitucionalService) {}
 
   @Get('institucional/decano-vigente')
+  @Roles(
+    RolUsuario.ADMIN,
+    RolUsuario.DECANO,
+    RolUsuario.SECRETARIA_ACADEMICA,
+    RolUsuario.ADMINISTRATIVO,
+  )
   @ApiOperation({ summary: 'Obtener datos del Decano Firmante vigente' })
   async obtenerDecanoVigente() {
     return this.institucionalService.obtenerDecanoFirmanteVigente();

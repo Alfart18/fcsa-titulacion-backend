@@ -68,6 +68,23 @@ export class PlantillasService implements OnModuleInit {
     return plantilla;
   }
 
+  private sanitizarPlantillaHtml(html: string): string {
+    return html
+      .replace(/<\s*(script|iframe|object|embed|style|link|meta|base|form)\b[^>]*>[\s\S]*?<\/\s*\1\s*>/gi, '')
+      .replace(/<\s*(script|iframe|object|embed|style|link|meta|base|form)\b[^>]*\/?>/gi, '')
+      .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+      .replace(/\b(href|src|action|formaction|xlink:href)\s*=\s*(?:"\s*(?:javascript|vbscript|data):[^"]*"|'\s*(?:javascript|vbscript|data):[^']*')/gi, '');
+  }
+
+  private escaparHtml(valor: string): string {
+    return valor
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   async actualizarPlantilla(
     tipo: TipoResolucion,
     dto: ActualizarPlantillaDto,
@@ -75,6 +92,7 @@ export class PlantillasService implements OnModuleInit {
   ) {
     const actual = await this.obtenerPorTipo(tipo);
     const nuevaVersion = actual.versionActual + 1;
+    const cuerpoHtmlSeguro = this.sanitizarPlantillaHtml(dto.cuerpoHtml);
 
     return this.prisma.$transaction(async (tx) => {
       const usuarioId = await this.prisma.resolverUsuarioId(usuario, tx);
@@ -85,7 +103,7 @@ export class PlantillasService implements OnModuleInit {
           nombre: dto.nombre ?? actual.nombre,
           seriePorDefecto: dto.seriePorDefecto ?? actual.seriePorDefecto,
           asuntoPlantilla: dto.asuntoPlantilla,
-          cuerpoHtml: dto.cuerpoHtml,
+          cuerpoHtml: cuerpoHtmlSeguro,
           activa: dto.activa ?? actual.activa,
           versionActual: nuevaVersion,
           actualizadoPorId: usuarioId,
@@ -288,9 +306,15 @@ export class PlantillasService implements OnModuleInit {
     return vars;
   }
 
-  interpolarTexto(plantillaTexto: string, variables: Record<string, string>): string {
+  interpolarTexto(
+    plantillaTexto: string,
+    variables: Record<string, string>,
+    escaparParaHtml = false,
+  ): string {
     return plantillaTexto.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
-      return variables[key] ?? `{{${key}}}`;
+      const val = variables[key];
+      if (val === undefined) return `{{${key}}}`;
+      return escaparParaHtml ? this.escaparHtml(val) : val;
     });
   }
 
@@ -298,8 +322,10 @@ export class PlantillasService implements OnModuleInit {
     const plantilla = await this.obtenerPorTipo(tipo);
     const variables = await this.construirContextoVariables(dto.expedienteId, dto.tesistaId, dto.variablesExtra);
 
-    const asuntoRenderizado = this.interpolarTexto(plantilla.asuntoPlantilla, variables);
-    const cuerpoHtmlRenderizado = this.interpolarTexto(plantilla.cuerpoHtml, variables);
+    const asuntoRenderizado = this.interpolarTexto(plantilla.asuntoPlantilla, variables, false);
+    const cuerpoHtmlRenderizado = this.sanitizarPlantillaHtml(
+      this.interpolarTexto(plantilla.cuerpoHtml, variables, true),
+    );
 
     return {
       tipo: plantilla.tipo,

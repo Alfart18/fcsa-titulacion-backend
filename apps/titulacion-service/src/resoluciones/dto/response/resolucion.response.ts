@@ -24,7 +24,7 @@ export interface ExpedienteResumenResolucionResponse {
 
 export interface ResolucionResponse {
   id: string;
-  expedienteId: string;
+  expedienteId: string | null;
   tipo: TipoResolucion;
   serie: SerieNumeracion;
   numeroCorrelativo: number;
@@ -49,5 +49,5 @@ export interface ResolucionResponse {
   usuarioEmisorId: string;
   creadoEn: Date;
   actualizadoEn: Date;
-  expediente?: ExpedienteResumenResolucionResponse;
+  expediente?: ExpedienteResumenResolucionResponse | null;
 }

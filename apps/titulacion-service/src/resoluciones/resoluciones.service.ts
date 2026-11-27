@@ -7,22 +7,39 @@ import {
 import { createHash, randomUUID } from 'crypto';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import {
+  CategoriaNumeracion,
   EstadoDocumentalRes,
   EstadoExpediente,
+  EstadoTesista,
   EstadoUsuario,
   OrigenResolucion,
   Prisma,
   SerieNumeracion,
   SituacionJuridicaRes,
+  TipoImpactoResolucion,
   TipoResolucion,
 } from '../generated/client';
+import { LibrosService } from '../libros/libros.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CrearResolucionDto } from './dto/crear-resolucion.dto';
 import type { ResolucionResponse } from './dto/response/resolucion.response';
 
+const PASO_SIGUIENTE_POR_TIPO: Partial<Record<TipoResolucion, number>> = {
+  [TipoResolucion.ASESOR]: 2,
+  [TipoResolucion.DICTAMEN]: 3,
+  [TipoResolucion.INSCRIPCION]: 4,
+  [TipoResolucion.TERCER_DICT]: 5,
+  [TipoResolucion.APTO]: 6,
+  [TipoResolucion.FECHA_HORA]: 7,
+  [TipoResolucion.TITULO]: 7,
+};
+
 @Injectable()
 export class ResolucionesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly librosService: LibrosService,
+  ) {}
 
   private determinarSeriePorTipo(
     tipo: TipoResolucion,
@@ -168,6 +185,41 @@ export class ResolucionesService {
         versionPdf: 1,
       });
 
+      const datos = dto.datosEspecificos;
+
+      // Validaciones de reglas de negocio en servidor (no confiar solo en frontend)
+      if (
+        dto.tipo === TipoResolucion.CAMBIO_DICTAMINANTE &&
+        expediente.fechaHoraResolucionId
+      ) {
+        throw new BadRequestException(
+          'No se puede cambiar dictaminantes porque el expediente ya tiene resolución de Fecha y Hora de Sustentación (Paso 6).',
+        );
+      }
+
+      if (dto.tipo === TipoResolucion.APTO && !dto.tesistaId) {
+        throw new BadRequestException(
+          'La resolución de Apto (Paso 5) debe especificar el tesistaId correspondiente.',
+        );
+      }
+
+      if (dto.tipo === TipoResolucion.TITULO) {
+        if (!dto.tesistaId) {
+          throw new BadRequestException(
+            'La resolución de Título Profesional (Paso 7) debe especificar el tesistaId correspondiente.',
+          );
+        }
+        const notaRaw = datos.notaSustentacion;
+        if (notaRaw !== undefined && notaRaw !== null) {
+          const notaNum = Number(notaRaw);
+          if (!Number.isInteger(notaNum) || notaNum < 14 || notaNum > 20) {
+            throw new BadRequestException(
+              'La calificación de sustentación debe ser un número entero entre 14 y 20.',
+            );
+          }
+        }
+      }
+
       const usuarioId = await this.prisma.resolverUsuarioId(usuarioActual, tx);
 
       const nuevaResolucion = await tx.resolucion.create({
@@ -195,10 +247,27 @@ export class ResolucionesService {
         },
       });
 
-      const datos = dto.datosEspecificos;
-      const updateExpedienteData: Prisma.ExpedienteUpdateInput = {
-        pasoActual: { increment: 1 },
-      };
+      // Registrar asiento automático en el Libro de Numeración (categoría TITULACION)
+      await tx.libroNumeracion.create({
+        data: {
+          numeroCompleto,
+          numero: contador.ultimoNumero,
+          anio: anioActual,
+          serie,
+          categoria: CategoriaNumeracion.TITULACION,
+          tipoDocumentoExterno: null,
+          descripcion: `${dto.tipo} - Expediente ${expediente.codigoExpediente}`,
+          fechaDocumento: fechaEmision,
+          registradoPorId: usuarioId,
+          resolucionId: nuevaResolucion.id,
+        },
+      });
+
+      const updateExpedienteData: Prisma.ExpedienteUpdateInput = {};
+      const pasoSiguiente = PASO_SIGUIENTE_POR_TIPO[dto.tipo];
+      if (pasoSiguiente !== undefined && pasoSiguiente > expediente.pasoActual) {
+        updateExpedienteData.pasoActual = pasoSiguiente;
+      }
 
       const tituloDesdeDatos =
         typeof datos.tituloTesis === 'string' && datos.tituloTesis.trim().length > 0
@@ -213,18 +282,52 @@ export class ResolucionesService {
         updateExpedienteData.tituloResolucionId = nuevaResolucion.id;
       }
 
+      // Helper para marcar resolución antecedente como MODIFICADA en cambios
+      const marcarAntecedenteModificada = async (motivo?: string) => {
+        if (!dto.resolucionAntecedenteId) return;
+        const ant = await tx.resolucion.findUnique({
+          where: { id: dto.resolucionAntecedenteId },
+          select: { id: true, situacionJuridica: true },
+        });
+        if (ant && ant.situacionJuridica === SituacionJuridicaRes.VIGENTE) {
+          await tx.resolucion.update({
+            where: { id: ant.id },
+            data: { situacionJuridica: SituacionJuridicaRes.MODIFICADA },
+          });
+          await tx.dseAfectada.create({
+            data: {
+              resolucionDseId: nuevaResolucion.id,
+              resolucionAfectadaId: ant.id,
+              estadoPrevio: ant.situacionJuridica,
+              tipoImpacto: TipoImpactoResolucion.MODIFICA,
+              motivo: motivo ?? `Modificada por ${dto.tipo} (${numeroCompleto})`,
+            },
+          });
+        }
+      };
+
       switch (dto.tipo) {
-        case TipoResolucion.ASESOR:
-        case TipoResolucion.CAMBIO_ASESOR: {
+        case TipoResolucion.ASESOR: {
           updateExpedienteData.asesorResolucionId = nuevaResolucion.id;
           if (typeof datos.asesorDocenteId === 'string') {
             updateExpedienteData.asesorDocenteId = datos.asesorDocenteId;
           }
           break;
         }
+        case TipoResolucion.CAMBIO_ASESOR: {
+          updateExpedienteData.asesorResolucionId = nuevaResolucion.id;
+          if (typeof datos.asesorDocenteId === 'string') {
+            updateExpedienteData.asesorDocenteId = datos.asesorDocenteId;
+          }
+          await marcarAntecedenteModificada(
+            typeof datos.causaTextoConsolidadoSnapshot === 'string'
+              ? datos.causaTextoConsolidadoSnapshot
+              : undefined,
+          );
+          break;
+        }
         case TipoResolucion.DICTAMEN:
-        case TipoResolucion.TERCER_DICT:
-        case TipoResolucion.CAMBIO_DICTAMINANTE: {
+        case TipoResolucion.TERCER_DICT: {
           updateExpedienteData.dictaminantesResolucionId = nuevaResolucion.id;
           if (typeof datos.dictaminante1Id === 'string') {
             updateExpedienteData.dictaminante1Id = datos.dictaminante1Id;
@@ -237,8 +340,44 @@ export class ResolucionesService {
           }
           break;
         }
+        case TipoResolucion.CAMBIO_DICTAMINANTE: {
+          updateExpedienteData.dictaminantesResolucionId = nuevaResolucion.id;
+          if (typeof datos.dictaminante1Id === 'string') {
+            updateExpedienteData.dictaminante1Id = datos.dictaminante1Id;
+          }
+          if (typeof datos.dictaminante2Id === 'string') {
+            updateExpedienteData.dictaminante2Id = datos.dictaminante2Id;
+          }
+          if (typeof datos.dictaminante3Id === 'string') {
+            updateExpedienteData.dictaminante3Id = datos.dictaminante3Id;
+          }
+          await marcarAntecedenteModificada(
+            typeof datos.causaTextoConsolidadoSnapshot === 'string'
+              ? datos.causaTextoConsolidadoSnapshot
+              : undefined,
+          );
+          break;
+        }
         case TipoResolucion.INSCRIPCION: {
           updateExpedienteData.inscripcionResolucionId = nuevaResolucion.id;
+          const tituloParaLibro =
+            tituloDesdeDatos ||
+            (typeof datos.tituloInscritoSnapshot === 'string'
+              ? datos.tituloInscritoSnapshot.trim()
+              : undefined) ||
+            expediente.tituloActual ||
+            undefined;
+          if (tituloParaLibro) {
+            const asientoInsc =
+              await this.librosService.registrarAsientoInscripcionTx(tx, {
+                expedienteId: expediente.id,
+                resolucionInscripcionId: nuevaResolucion.id,
+                anio: anioActual,
+                fechaAsiento: fechaEmision,
+                tituloOverride: tituloParaLibro,
+              });
+            updateExpedienteData.libroInscripcionId = asientoInsc.id;
+          }
           break;
         }
         case TipoResolucion.FECHA_HORA: {
@@ -247,6 +386,7 @@ export class ResolucionesService {
         }
         case TipoResolucion.CAMBIO_TITULO: {
           updateExpedienteData.tituloResolucionId = nuevaResolucion.id;
+          await marcarAntecedenteModificada('Cambio de título de proyecto/tesis');
           break;
         }
         case TipoResolucion.APTO: {
@@ -260,10 +400,185 @@ export class ResolucionesService {
         }
         case TipoResolucion.TITULO: {
           if (dto.tesistaId) {
+            const notaNum =
+              datos.notaSustentacion !== undefined &&
+              datos.notaSustentacion !== null
+                ? Number(datos.notaSustentacion)
+                : null;
+            const fechaSustReal =
+              typeof datos.fechaSustentacionReal === 'string' &&
+              datos.fechaSustentacionReal.trim().length > 0
+                ? new Date(datos.fechaSustentacionReal)
+                : null;
+            const resultadoSust =
+              typeof datos.resultadoSustentacion === 'string' &&
+              datos.resultadoSustentacion.trim().length > 0
+                ? datos.resultadoSustentacion.trim().slice(0, 80)
+                : null;
+
             await tx.tesista.update({
               where: { id: dto.tesistaId },
-              data: { tituloResolucionId: nuevaResolucion.id },
+              data: {
+                tituloResolucionId: nuevaResolucion.id,
+                ...(fechaSustReal ? { fechaSustentacionReal: fechaSustReal } : {}),
+                ...(notaNum !== null ? { notaSustentacion: notaNum } : {}),
+                ...(resultadoSust ? { resultadoSustentacion: resultadoSust } : {}),
+              },
             });
+
+            // Registrar en Libro de Títulos (manteniendo estado APTO hasta que se firme el PDF)
+            const expEscuela = await tx.escuelaProfesional.findUnique({
+              where: { id: expediente.escuelaProfesionalId },
+            });
+            const tesistaObj = await tx.tesista.findUnique({
+              where: { id: dto.tesistaId },
+              include: { persona: true },
+            });
+            if (expEscuela && tesistaObj) {
+              const contTit = await tx.contadorLibroTitulo.upsert({
+                where: {
+                  escuelaProfesionalId_anio: {
+                    escuelaProfesionalId: expediente.escuelaProfesionalId,
+                    anio: anioActual,
+                  },
+                },
+                update: { ultimoRegistro: { increment: 1 } },
+                create: {
+                  escuelaProfesionalId: expediente.escuelaProfesionalId,
+                  anio: anioActual,
+                  ultimoRegistro: 1,
+                },
+              });
+              await tx.libroTitulo.create({
+                data: {
+                  tesistaId: tesistaObj.id,
+                  numeroRegistro: contTit.ultimoRegistro,
+                  anioRegistro: anioActual,
+                  expedienteId: expediente.id,
+                  resolucionTituloId: nuevaResolucion.id,
+                  escuelaProfesionalId: expediente.escuelaProfesionalId,
+                  tituladoTexto: tesistaObj.persona.nombreCompleto.slice(0, 250),
+                  denominacionOtorgada: expEscuela.tituloProfesional.slice(0, 200),
+                  fechaSustentacion: fechaSustReal,
+                  notaNumero: notaNum,
+                  notaCalificativo: resultadoSust,
+                  informeConformidadSA:
+                    typeof datos.informeConformidadSA === 'string'
+                      ? datos.informeConformidadSA.slice(0, 100)
+                      : null,
+                  estado: 'VIGENTE',
+                },
+              });
+            }
+          }
+          break;
+        }
+        case TipoResolucion.DESISTIMIENTO: {
+          const idDesistente =
+            dto.tesistaId ||
+            (typeof datos.tesistaDesistenteId === 'string'
+              ? datos.tesistaDesistenteId
+              : undefined);
+          if (idDesistente) {
+            const pertenece = expediente.tesistas.some((t) => t.id === idDesistente);
+            if (!pertenece) {
+              throw new BadRequestException(
+                'El tesista indicado para desistimiento no pertenece a este expediente.',
+              );
+            }
+            await tx.tesista.update({
+              where: { id: idDesistente },
+              data: { estado: EstadoTesista.DESISTIDO },
+            });
+          }
+          break;
+        }
+        case TipoResolucion.DSE: {
+          const afectadasRaw = Array.isArray(datos.resolucionesAfectadasIds)
+            ? datos.resolucionesAfectadasIds.filter(
+                (v): v is string => typeof v === 'string' && v.trim().length > 0,
+              )
+            : [];
+          const motivoDse =
+            typeof datos.causaTextoConsolidadoSnapshot === 'string'
+              ? datos.causaTextoConsolidadoSnapshot
+              : 'Dejada sin efecto mediante DSE';
+
+          if (afectadasRaw.length > 0) {
+            const resolucionesAfectadas = await tx.resolucion.findMany({
+              where: {
+                id: { in: afectadasRaw },
+                expedienteId: expediente.id,
+              },
+            });
+
+            const idsAfectadosSet = new Set(resolucionesAfectadas.map((r) => r.id));
+
+            for (const resAf of resolucionesAfectadas) {
+              if (resAf.situacionJuridica !== SituacionJuridicaRes.SIN_EFECTO) {
+                await tx.resolucion.update({
+                  where: { id: resAf.id },
+                  data: { situacionJuridica: SituacionJuridicaRes.SIN_EFECTO },
+                });
+                await tx.dseAfectada.create({
+                  data: {
+                    resolucionDseId: nuevaResolucion.id,
+                    resolucionAfectadaId: resAf.id,
+                    estadoPrevio: resAf.situacionJuridica,
+                    tipoImpacto: TipoImpactoResolucion.DEJA_SIN_EFECTO,
+                    motivo: motivoDse,
+                  },
+                });
+              }
+            }
+
+            if (expediente.asesorResolucionId && idsAfectadosSet.has(expediente.asesorResolucionId)) {
+              updateExpedienteData.asesorResolucionId = null;
+              updateExpedienteData.asesorDocenteId = null;
+            }
+            if (expediente.dictaminantesResolucionId && idsAfectadosSet.has(expediente.dictaminantesResolucionId)) {
+              updateExpedienteData.dictaminantesResolucionId = null;
+              updateExpedienteData.dictaminante1Id = null;
+              updateExpedienteData.dictaminante2Id = null;
+              updateExpedienteData.dictaminante3Id = null;
+            }
+            if (expediente.inscripcionResolucionId && idsAfectadosSet.has(expediente.inscripcionResolucionId)) {
+              updateExpedienteData.inscripcionResolucionId = null;
+            }
+            if (expediente.fechaHoraResolucionId && idsAfectadosSet.has(expediente.fechaHoraResolucionId)) {
+              updateExpedienteData.fechaHoraResolucionId = null;
+            }
+            if (expediente.tituloResolucionId && idsAfectadosSet.has(expediente.tituloResolucionId)) {
+              updateExpedienteData.tituloResolucionId = null;
+            }
+
+            // Limpiar punteros individuales de tesistas si se anuló APTO o TITULO
+            await tx.tesista.updateMany({
+              where: {
+                expedienteId: expediente.id,
+                aptoResolucionId: { in: Array.from(idsAfectadosSet) },
+              },
+              data: { aptoResolucionId: null, estado: EstadoTesista.ACTIVO },
+            });
+            await tx.tesista.updateMany({
+              where: {
+                expedienteId: expediente.id,
+                tituloResolucionId: { in: Array.from(idsAfectadosSet) },
+              },
+              data: { tituloResolucionId: null, estado: EstadoTesista.APTO },
+            });
+          }
+
+          if (datos.reinicioIntegral === true) {
+            updateExpedienteData.pasoActual = 1;
+            updateExpedienteData.asesorResolucionId = null;
+            updateExpedienteData.asesorDocenteId = null;
+            updateExpedienteData.dictaminantesResolucionId = null;
+            updateExpedienteData.dictaminante1Id = null;
+            updateExpedienteData.dictaminante2Id = null;
+            updateExpedienteData.dictaminante3Id = null;
+            updateExpedienteData.inscripcionResolucionId = null;
+            updateExpedienteData.fechaHoraResolucionId = null;
           }
           break;
         }
@@ -285,6 +600,30 @@ export class ResolucionesService {
           inscripcionResolucionId: true,
           fechaHoraResolucionId: true,
           tituloResolucionId: true,
+        },
+      });
+
+      await tx.registroAuditoria.create({
+        data: {
+          usuarioId,
+          inicialesUsuario: usuarioActual.iniciales || 'OP',
+          accion:
+            dto.tipo === TipoResolucion.DSE
+              ? 'DEJAR_SIN_EFECTO'
+              : 'EMITIR_RESOLUCION',
+          entidad: 'resoluciones',
+          entidadId: nuevaResolucion.id,
+          expedienteId: expediente.id,
+          resolucionId: nuevaResolucion.id,
+          detalle: {
+            ejecutorIdJwt: usuarioActual.sub,
+            tipo: dto.tipo,
+            serie,
+            numeroCompleto,
+            codigoExpediente: expediente.codigoExpediente,
+            tesistaId: dto.tesistaId ?? null,
+            resolucionAntecedenteId: dto.resolucionAntecedenteId ?? null,
+          },
         },
       });
 

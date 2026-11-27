@@ -5,11 +5,14 @@ import {
   ExceptionFilter,
   HttpException,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(HttpExceptionFilter.name);
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
@@ -41,7 +44,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
             : HttpStatus[statusCode] || exception.name;
       }
     } else if (exception instanceof Error) {
-      message = exception.message;
+      this.logger.error(
+        `Error interno no controlado en ${request.method} ${request.originalUrl || request.url}: ${exception.message}`,
+        exception.stack,
+      );
+      message = 'Error interno del servidor.';
     }
 
     response.status(statusCode).json({

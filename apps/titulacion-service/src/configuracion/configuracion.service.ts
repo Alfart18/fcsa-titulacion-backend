@@ -85,6 +85,17 @@ export class ConfiguracionService {
         },
       });
 
+    // Mantener sincronizado identidad.configuracion_institucional (usado por documentos-service)
+    try {
+      await this.prisma.$executeRaw`
+        UPDATE identidad.configuracion_institucional
+        SET "reglamentoMarco" = ${institucionalActualizada.reglamentoMarco}, "actualizadoEn" = NOW()
+        WHERE id = ${institucionalActualizada.id}
+      `;
+    } catch {
+      // Ignorar si el esquema identidad no existe en entorno aislado
+    }
+
     const decanoFirmante = await this.obtenerDecanoFirmanteActual();
 
     return {
@@ -128,6 +139,18 @@ export class ConfiguracionService {
         data: { esDecanoFirmante: true },
       }),
     ]);
+
+    // Mantener sincronizado identidad.usuarios (usado por documentos-service e identidad-service)
+    try {
+      await this.prisma.$executeRaw`UPDATE identidad.usuarios SET "esDecanoFirmante" = false WHERE "esDecanoFirmante" = true`;
+      await this.prisma.$executeRaw`
+        UPDATE identidad.usuarios
+        SET "esDecanoFirmante" = true, "actualizadoEn" = NOW()
+        WHERE id = ${candidato.id}::uuid OR correo = ${candidato.correo}
+      `;
+    } catch {
+      // Ignorar si el esquema identidad no existe en entorno aislado
+    }
 
     return this.obtenerConfiguracion();
   }

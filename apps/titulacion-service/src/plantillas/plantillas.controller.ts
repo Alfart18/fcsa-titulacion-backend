@@ -15,11 +15,13 @@ export class PlantillasController {
   constructor(private readonly plantillasService: PlantillasService) {}
 
   @Get()
+  @Roles(RolUsuario.ADMIN, RolUsuario.DECANO, RolUsuario.SECRETARIA_ACADEMICA, RolUsuario.ADMINISTRATIVO)
   async listarTodas() {
     return this.plantillasService.listarTodas();
   }
 
   @Get(':tipo')
+  @Roles(RolUsuario.ADMIN, RolUsuario.DECANO, RolUsuario.SECRETARIA_ACADEMICA, RolUsuario.ADMINISTRATIVO)
   async obtenerPorTipo(@Param('tipo', new ParseEnumPipe(TipoResolucion)) tipo: TipoResolucion) {
     return this.plantillasService.obtenerPorTipo(tipo);
   }
@@ -51,6 +53,7 @@ export class PlantillasController {
   }
 
   @Post(':tipo/previsualizar')
+  @Roles(RolUsuario.ADMIN, RolUsuario.DECANO, RolUsuario.SECRETARIA_ACADEMICA, RolUsuario.ADMINISTRATIVO)
   async previsualizar(
     @Param('tipo', new ParseEnumPipe(TipoResolucion)) tipo: TipoResolucion,
     @Body() dto: PrevisualizarPlantillaDto,

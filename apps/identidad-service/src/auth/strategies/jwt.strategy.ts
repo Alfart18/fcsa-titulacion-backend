@@ -2,11 +2,13 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { EstadoUsuario } from '../../generated/client';
+import { IdentidadPrismaService } from '../../prisma/identidad-prisma.service';
 import type { JwtPayload } from '../interfaces/jwt-payload.interface';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor() {
+  constructor(private readonly prisma: IdentidadPrismaService) {
     const secret = process.env.JWT_SECRET;
     if (!secret) {
       throw new Error('La variable de entorno JWT_SECRET no está definida.');
@@ -19,7 +21,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  validate(payload: JwtPayload): JwtPayload {
+  async validate(payload: JwtPayload): Promise<JwtPayload> {
     const userId = payload?.sub || payload?.id;
     if (!payload || !userId || !payload.rol || !payload.iniciales) {
       throw new UnauthorizedException(
@@ -27,12 +29,30 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       );
     }
 
+    // Verificación en vivo de estado ACTIVO y rol vigente (revocación inmediata al desactivar)
+    const usuarioDb = await this.prisma.usuario.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        rol: true,
+        estado: true,
+        iniciales: true,
+        nombresCompletos: true,
+      },
+    });
+
+    if (!usuarioDb || usuarioDb.estado !== EstadoUsuario.ACTIVO) {
+      throw new UnauthorizedException(
+        'La cuenta fue desactivada o ya no existe. Inicie sesión nuevamente.',
+      );
+    }
+
     return {
-      id: userId,
-      sub: userId,
-      rol: payload.rol,
-      iniciales: payload.iniciales,
-      nombresCompletos: payload.nombresCompletos,
+      id: usuarioDb.id,
+      sub: usuarioDb.id,
+      rol: usuarioDb.rol,
+      iniciales: usuarioDb.iniciales,
+      nombresCompletos: usuarioDb.nombresCompletos,
       iat: payload.iat,
       exp: payload.exp,
     };

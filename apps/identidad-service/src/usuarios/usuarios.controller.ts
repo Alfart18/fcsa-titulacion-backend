@@ -48,13 +48,15 @@ export class UsuariosController {
     return this.usuariosService.crearUsuario(dto, {
       id: user.id,
       iniciales: user.iniciales,
+      rol: user.rol,
     });
   }
 
   @Patch('admin/usuarios/:id')
   @Roles(RolUsuario.ADMIN, RolUsuario.DECANO)
   @ApiOperation({
-    summary: 'Actualizar estado (ACTIVO/DESACTIVADO) o condición de Decano Firmante',
+    summary:
+      'Actualizar datos, rol, estado, condición de Decano Firmante o restablecer contraseña',
   })
   async actualizarUsuario(
     @Param('id', ParseUUIDPipe) id: string,
@@ -64,7 +66,17 @@ export class UsuariosController {
     return this.usuariosService.actualizarUsuario(id, dto, {
       id: user.id,
       iniciales: user.iniciales,
+      rol: user.rol,
     });
+  }
+
+  @Get('admin/usuarios/:id/actividad')
+  @Roles(RolUsuario.ADMIN, RolUsuario.DECANO)
+  @ApiOperation({
+    summary: 'Consultar actividad reciente de auditoría de un usuario específico',
+  })
+  async obtenerActividadUsuario(@Param('id', ParseUUIDPipe) id: string) {
+    return this.usuariosService.listarActividadUsuario(id);
   }
 
   @Get('internal/usuarios/:id')

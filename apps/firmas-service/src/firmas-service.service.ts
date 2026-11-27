@@ -1,9 +1,11 @@
 import {
   BadRequestException,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
   OnModuleInit,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import {
   EstadoDocumentalRes,
@@ -15,7 +17,7 @@ import {
   SituacionJuridicaRes,
   TipoResolucion,
 } from '@app/database';
-import { PDFDocument, PDFRawStream, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, PDFRawStream } from 'pdf-lib';
 import * as forge from 'node-forge';
 import AdmZip = require('adm-zip');
 import * as crypto from 'crypto';
@@ -25,6 +27,7 @@ import * as zlib from 'zlib';
 
 export interface ResultadoArchivoLote {
   nombreArchivo: string;
+  origenZip?: string;
   sha256Archivo: string;
   exito: boolean;
   resolucionId?: string;
@@ -129,61 +132,12 @@ export class FirmasServiceService implements OnModuleInit {
         };
       }
     } catch {
-      // Si documentos-service (4002) no está disponible, se activa el generador autónomo de respaldo
+      // documentos-service no disponible
     }
 
-    const bufferRespaldo = await this.generarPdfRespaldoAutonomo(resolucion);
-    return {
-      buffer: bufferRespaldo,
-      nombreArchivo: `${resolucion.numeroCompleto}_v${resolucion.versionPdf}.pdf`,
-      numeroCompleto: resolucion.numeroCompleto,
-    };
-  }
-
-  private async generarPdfRespaldoAutonomo(resolucion: any): Promise<Buffer> {
-    const selloControl = `ID-TRAMITE: ${resolucion.idTramiteControl} | VER: ${resolucion.versionPdf} | HASH: ${resolucion.hashVersionGenerado}`;
-    const pdfDoc = await PDFDocument.create();
-    const fontBold = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
-    const fontRegular = await pdfDoc.embedFont(StandardFonts.TimesRoman);
-    const fontFooter = await pdfDoc.embedFont(StandardFonts.Helvetica);
-
-    const page = pdfDoc.addPage([595.28, 841.89]);
-    page.drawText('UNIVERSIDAD ANDINA DEL CUSCO - FACULTAD DE CIENCIAS DE LA SALUD', {
-      x: 65,
-      y: 770,
-      size: 12,
-      font: fontBold,
-    });
-    page.drawText(`RESOLUCION N.° ${resolucion.numeroCompleto} (${resolucion.tipo})`, {
-      x: 65,
-      y: 740,
-      size: 11,
-      font: fontBold,
-    });
-    page.drawText(`Firmante: ${resolucion.nombreDecanoSnapshot}`, {
-      x: 65,
-      y: 700,
-      size: 10,
-      font: fontRegular,
-    });
-    page.drawText(`/${resolucion.inicialesOperador}   |   ${selloControl}`, {
-      x: 65,
-      y: 35,
-      size: 7.5,
-      font: fontFooter,
-      color: rgb(0.3, 0.35, 0.4),
-    });
-
-    pdfDoc.setSubject(selloControl);
-    pdfDoc.setKeywords([
-      'FCSa-UAC',
-      resolucion.idTramiteControl,
-      `VER-${resolucion.versionPdf}`,
-      `HASH-${resolucion.hashVersionGenerado}`,
-      resolucion.numeroCompleto,
-    ]);
-
-    return Buffer.from(await pdfDoc.save());
+    throw new ServiceUnavailableException(
+      `No se pudo generar el PDF oficial de la resolución ${resolucion.numeroCompleto} porque documentos-service (${docsUrl}) no está disponible. Verifique que el servicio esté activo antes de descargar el lote para firma.`,
+    );
   }
 
   // ==========================================================================
@@ -363,19 +317,15 @@ export class FirmasServiceService implements OnModuleInit {
     }
 
     // ------------------------------------------------------------------------
-    // NIVEL 3: RESPALDO POR NÚMERO OFICIAL DE RESOLUCIÓN EN TEXTO O NOMBRE DE ARCHIVO
+    // NIVEL 3: RESPALDO POR NÚMERO OFICIAL DE RESOLUCIÓN DENTRO DEL CONTENIDO DEL PDF
+    // (No se confía únicamente en el nombre del archivo para evitar sustituciones por renombrado)
     // ------------------------------------------------------------------------
     const regexNumeroResolucion =
       /(RES-(?:ORD|CF)-\d{4}-\d{4,}|\d{4}-\d{4}(?:-CF)?-FCSa-UAC)/i;
     const matchNumEnTexto = corpusTextoCompleto.match(regexNumeroResolucion);
-    const matchNumEnArchivo = nombreArchivoSubido.match(regexNumeroResolucion);
     const matchVerEnArchivo = nombreArchivoSubido.match(/_v(\d+)/i);
 
-    const numeroDetectado = matchNumEnTexto
-      ? matchNumEnTexto[1]
-      : matchNumEnArchivo
-        ? matchNumEnArchivo[1]
-        : null;
+    const numeroDetectado = matchNumEnTexto ? matchNumEnTexto[1] : null;
 
     return {
       idTramite: null,
@@ -485,7 +435,37 @@ export class FirmasServiceService implements OnModuleInit {
       );
     }
 
-    const certFirmante = certificados[0];
+    const rawCapture = p7Msg.rawCapture || {};
+
+    // Identificar el certificado exacto del firmante por número de serie (no asumir certificados[0])
+    let certFirmante = certificados[0];
+    if (rawCapture.serial) {
+      const serialEsperado = Buffer.from(String(rawCapture.serial), 'binary')
+        .toString('hex')
+        .replace(/^0+/, '')
+        .toLowerCase();
+      const coincidente = certificados.find(
+        (c) => c.serialNumber.replace(/^0+/, '').toLowerCase() === serialEsperado,
+      );
+      if (coincidente) {
+        certFirmante = coincidente;
+      }
+    }
+
+    // Verificar ventana de vigencia del certificado X.509 (salvo ALLOW_EXPIRED_CERT=true)
+    const permitirCertExpirado =
+      (process.env.ALLOW_EXPIRED_CERT || 'false').toLowerCase() === 'true';
+    const ahora = new Date();
+    if (
+      !permitirCertExpirado &&
+      certFirmante.validity &&
+      (ahora < certFirmante.validity.notBefore || ahora > certFirmante.validity.notAfter)
+    ) {
+      throw new BadRequestException(
+        `CERTIFICADO_EXPIRADO_O_NO_VIGENTE: El certificado X.509 de '${certFirmante.subject.getField('CN')?.value ?? 'FIRMANTE'}' no está vigente en la fecha actual.`,
+      );
+    }
+
     const cnField = certFirmante.subject.getField('CN');
     const orgField = certFirmante.subject.getField('O');
     const firmanteCN = cnField ? String(cnField.value) : 'FIRMANTE DESCONOCIDO';
@@ -497,14 +477,13 @@ export class FirmasServiceService implements OnModuleInit {
       pdfBuffer.subarray(b1, b1 + l1),
     ]);
 
-    const hashesCalculados = {
+    const hashesCalculados: Record<string, string> = {
       sha256: crypto.createHash('sha256').update(bytesFirmadosDelPdf).digest('hex').toLowerCase(),
       sha1: crypto.createHash('sha1').update(bytesFirmadosDelPdf).digest('hex').toLowerCase(),
       sha384: crypto.createHash('sha384').update(bytesFirmadosDelPdf).digest('hex').toLowerCase(),
       sha512: crypto.createHash('sha512').update(bytesFirmadosDelPdf).digest('hex').toLowerCase(),
     };
 
-    const rawCapture = p7Msg.rawCapture || {};
     const authenticatedAttributes: forge.asn1.Asn1[] = rawCapture.authenticatedAttributes || [];
 
     let messageDigestExtraidoHex: string | null = null;
@@ -531,17 +510,66 @@ export class FirmasServiceService implements OnModuleInit {
       );
     }
 
+    const oidToDigestAlg: Record<string, string> = {
+      '1.3.14.3.2.26': 'sha1',
+      '2.16.840.1.101.3.4.2.1': 'sha256',
+      '2.16.840.1.101.3.4.2.2': 'sha384',
+      '2.16.840.1.101.3.4.2.3': 'sha512',
+    };
+    const digestOid = rawCapture.digestAlgorithm
+      ? forge.asn1.derToOid(String(rawCapture.digestAlgorithm))
+      : '';
+    const algDeclarado = oidToDigestAlg[digestOid] || null;
+
     let algoritmoCoincidente: string | null = null;
-    for (const [alg, hashHex] of Object.entries(hashesCalculados)) {
-      if (hashHex === messageDigestExtraidoHex) {
-        algoritmoCoincidente = alg.toUpperCase();
-        break;
+    if (algDeclarado && hashesCalculados[algDeclarado] === messageDigestExtraidoHex) {
+      algoritmoCoincidente = algDeclarado.toUpperCase();
+    } else {
+      for (const [alg, hashHex] of Object.entries(hashesCalculados)) {
+        if (hashHex === messageDigestExtraidoHex) {
+          algoritmoCoincidente = alg.toUpperCase();
+          break;
+        }
       }
     }
 
     if (!algoritmoCoincidente) {
       throw new BadRequestException(
         'DOCUMENTO_ALTERADO: El hash criptográfico del documento PDF no coincide con el messageDigest sellado en la firma PKCS#7.',
+      );
+    }
+
+    // 3b. Verificación criptográfica real de la firma digital (RSA/ECDSA) sobre los authenticatedAttributes (RFC 5652 §5.4)
+    if (!rawCapture.signature || authenticatedAttributes.length === 0) {
+      throw new BadRequestException(
+        'FIRMA_CRIPTOGRAFICA_INCOMPLETA: El contenedor PKCS#7 no incluye los bytes de firma criptográfica.',
+      );
+    }
+
+    let firmaValida = false;
+    try {
+      const certPem = forge.pki.certificateToPem(certFirmante);
+      const publicKey = crypto.createPublicKey(certPem);
+      const attrsSetAsn1 = forge.asn1.create(
+        forge.asn1.Class.UNIVERSAL,
+        forge.asn1.Type.SET,
+        true,
+        authenticatedAttributes,
+      );
+      const attrsDer = Buffer.from(
+        forge.asn1.toDer(attrsSetAsn1).getBytes(),
+        'binary',
+      );
+      const signatureBytes = Buffer.from(String(rawCapture.signature), 'binary');
+      const verifyAlg = algDeclarado || algoritmoCoincidente.toLowerCase();
+      firmaValida = crypto.verify(verifyAlg, attrsDer, publicKey, signatureBytes);
+    } catch {
+      firmaValida = false;
+    }
+
+    if (!firmaValida) {
+      throw new BadRequestException(
+        'FIRMA_CRIPTOGRAFICA_INVALIDA: La firma digital PKCS#7 no corresponde matemáticamente a la clave pública del certificado X.509 o el bloque firmado fue manipulado.',
       );
     }
 
@@ -576,23 +604,251 @@ export class FirmasServiceService implements OnModuleInit {
   }
 
   // ==========================================================================
-  // 5. VALIDACIÓN DE LOTE DE ARCHIVOS PDF CON AISLAMIENTO DE FALLOS
+  // 5. VALIDACIÓN DE LOTE DE ARCHIVOS PDF / .ZIP CON AISLAMIENTO DE FALLOS
   // ==========================================================================
+  private esArchivoZip(archivo: Express.Multer.File): boolean {
+    const buf = archivo.buffer;
+    const tieneMagicZip =
+      buf.length >= 4 &&
+      buf[0] === 0x50 &&
+      buf[1] === 0x4b &&
+      (buf[2] === 0x03 || buf[2] === 0x05 || buf[2] === 0x07);
+    const nombre = (archivo.originalname || '').toLowerCase();
+    return tieneMagicZip || nombre.endsWith('.zip');
+  }
+
+  private expandirArchivosYDescomprimirZips(
+    archivos: Array<Express.Multer.File>,
+  ): {
+    pdfsParaProcesar: Array<{
+      archivo: Express.Multer.File;
+      origenZip?: string;
+    }>;
+    erroresDescompresion: ResultadoArchivoLote[];
+  } {
+    const MAX_PDF_BYTES = 5 * 1024 * 1024; // 5 MB por PDF individual
+    const MAX_TOTAL_PDFS = 25;
+    const MAX_UNCOMPRESSED_TOTAL_BYTES = 50 * 1024 * 1024; // 50 MB anti Zip-Bomb
+
+    const pdfsParaProcesar: Array<{
+      archivo: Express.Multer.File;
+      origenZip?: string;
+    }> = [];
+    const erroresDescompresion: ResultadoArchivoLote[] = [];
+    let totalBytesDescomprimidos = 0;
+
+    for (const archivo of archivos) {
+      const nombreOriginal = archivo.originalname || 'archivo_sin_nombre';
+      const sha256 = crypto
+        .createHash('sha256')
+        .update(archivo.buffer)
+        .digest('hex')
+        .toUpperCase();
+
+      if (!this.esArchivoZip(archivo)) {
+        if (archivo.buffer.length > MAX_PDF_BYTES) {
+          erroresDescompresion.push({
+            nombreArchivo: nombreOriginal,
+            sha256Archivo: sha256,
+            exito: false,
+            codigoError: 'ARCHIVO_DEMASIADO_GRANDE',
+            mensajeError:
+              'ARCHIVO_DEMASIADO_GRANDE: Cada archivo PDF individual no puede superar los 5 MB.',
+          });
+          continue;
+        }
+        if (pdfsParaProcesar.length >= MAX_TOTAL_PDFS) {
+          erroresDescompresion.push({
+            nombreArchivo: nombreOriginal,
+            sha256Archivo: sha256,
+            exito: false,
+            codigoError: 'LIMITE_LOTE_EXCEDIDO',
+            mensajeError: `LIMITE_LOTE_EXCEDIDO: El lote supera el máximo de ${MAX_TOTAL_PDFS} archivos PDF por envío.`,
+          });
+          continue;
+        }
+        pdfsParaProcesar.push({ archivo });
+        continue;
+      }
+
+      // Descompresión segura de archivo .ZIP (anti Zip-Slip y anti Zip-Bomb)
+      let zip: AdmZip;
+      try {
+        zip = new AdmZip(archivo.buffer);
+      } catch {
+        erroresDescompresion.push({
+          nombreArchivo: nombreOriginal,
+          sha256Archivo: sha256,
+          exito: false,
+          codigoError: 'ZIP_CORRUPTO',
+          mensajeError:
+            'ZIP_CORRUPTO: El archivo .ZIP está dañado o no tiene una estructura comprimida válida.',
+        });
+        continue;
+      }
+
+      const entradas = zip.getEntries();
+      let pdfsEnEsteZip = 0;
+
+      for (const entrada of entradas) {
+        if (entrada.isDirectory) continue;
+
+        const rutaEntrada = entrada.entryName.replace(/\\/g, '/');
+        // Ignorar metadatos de sistema operativo y manifiestos internos del lote
+        if (
+          rutaEntrada.startsWith('__MACOSX/') ||
+          rutaEntrada.includes('/__MACOSX/')
+        ) {
+          continue;
+        }
+
+        const nombreBase = path.basename(rutaEntrada);
+        if (
+          !nombreBase ||
+          nombreBase.startsWith('.') ||
+          !nombreBase.toLowerCase().endsWith('.pdf')
+        ) {
+          continue;
+        }
+
+        pdfsEnEsteZip++;
+
+        if (pdfsParaProcesar.length >= MAX_TOTAL_PDFS) {
+          erroresDescompresion.push({
+            nombreArchivo: nombreBase,
+            origenZip: nombreOriginal,
+            sha256Archivo: sha256,
+            exito: false,
+            codigoError: 'LIMITE_LOTE_EXCEDIDO',
+            mensajeError: `LIMITE_LOTE_EXCEDIDO: El paquete ${nombreOriginal} excede el límite máximo de ${MAX_TOTAL_PDFS} PDFs por lote.`,
+          });
+          continue;
+        }
+
+        if (entrada.header.size > MAX_PDF_BYTES) {
+          erroresDescompresion.push({
+            nombreArchivo: nombreBase,
+            origenZip: nombreOriginal,
+            sha256Archivo: sha256,
+            exito: false,
+            codigoError: 'ARCHIVO_DEMASIADO_GRANDE',
+            mensajeError: `ARCHIVO_DEMASIADO_GRANDE: El PDF '${nombreBase}' dentro de ${nombreOriginal} supera el límite de 5 MB.`,
+          });
+          continue;
+        }
+
+        if (
+          totalBytesDescomprimidos + entrada.header.size >
+          MAX_UNCOMPRESSED_TOTAL_BYTES
+        ) {
+          erroresDescompresion.push({
+            nombreArchivo: nombreBase,
+            origenZip: nombreOriginal,
+            sha256Archivo: sha256,
+            exito: false,
+            codigoError: 'ZIP_TAMANO_EXCEDIDO',
+            mensajeError: `ZIP_TAMANO_EXCEDIDO: El contenido descomprimido supera el máximo seguro de 50 MB.`,
+          });
+          continue;
+        }
+
+        let pdfBuf: Buffer;
+        try {
+          pdfBuf = entrada.getData();
+        } catch {
+          erroresDescompresion.push({
+            nombreArchivo: nombreBase,
+            origenZip: nombreOriginal,
+            sha256Archivo: sha256,
+            exito: false,
+            codigoError: 'ZIP_ENTRADA_CORRUPTA',
+            mensajeError: `ZIP_ENTRADA_CORRUPTA: No se pudo descomprimir '${nombreBase}' desde ${nombreOriginal}.`,
+          });
+          continue;
+        }
+
+        if (pdfBuf.length > MAX_PDF_BYTES) {
+          erroresDescompresion.push({
+            nombreArchivo: nombreBase,
+            origenZip: nombreOriginal,
+            sha256Archivo: crypto
+              .createHash('sha256')
+              .update(pdfBuf)
+              .digest('hex')
+              .toUpperCase(),
+            exito: false,
+            codigoError: 'ARCHIVO_DEMASIADO_GRANDE',
+            mensajeError: `ARCHIVO_DEMASIADO_GRANDE: El PDF '${nombreBase}' supera el límite de 5 MB tras descomprimir.`,
+          });
+          continue;
+        }
+
+        totalBytesDescomprimidos += pdfBuf.length;
+        if (totalBytesDescomprimidos > MAX_UNCOMPRESSED_TOTAL_BYTES) {
+          erroresDescompresion.push({
+            nombreArchivo: nombreBase,
+            origenZip: nombreOriginal,
+            sha256Archivo: crypto
+              .createHash('sha256')
+              .update(pdfBuf)
+              .digest('hex')
+              .toUpperCase(),
+            exito: false,
+            codigoError: 'ZIP_TAMANO_EXCEDIDO',
+            mensajeError:
+              'ZIP_TAMANO_EXCEDIDO: El tamaño descomprimido total supera el límite seguro de 50 MB.',
+          });
+          continue;
+        }
+
+        pdfsParaProcesar.push({
+          origenZip: nombreOriginal,
+          archivo: {
+            ...archivo,
+            originalname: nombreBase,
+            mimetype: 'application/pdf',
+            buffer: pdfBuf,
+            size: pdfBuf.length,
+          },
+        });
+      }
+
+      if (pdfsEnEsteZip === 0) {
+        erroresDescompresion.push({
+          nombreArchivo: nombreOriginal,
+          sha256Archivo: sha256,
+          exito: false,
+          codigoError: 'ZIP_SIN_PDFS',
+          mensajeError: `ZIP_SIN_PDFS: El paquete '${nombreOriginal}' no contiene ningún archivo .pdf para validar.`,
+        });
+      }
+    }
+
+    return { pdfsParaProcesar, erroresDescompresion };
+  }
+
   async validarLotePdfsFirmados(
     archivos: Array<Express.Multer.File>,
     ejecutor: EjecutorFirma,
   ) {
     if (!archivos || archivos.length === 0) {
       throw new BadRequestException(
-        'Debe adjuntar al menos un archivo PDF en el campo "archivos".',
+        'Debe adjuntar al menos un archivo PDF o paquete .ZIP en el campo "archivos".',
       );
     }
 
-    const procesados: ResultadoArchivoLote[] = [];
-    const errores: ResultadoArchivoLote[] = [];
+    const { pdfsParaProcesar, erroresDescompresion } =
+      this.expandirArchivosYDescomprimirZips(archivos);
 
-    for (const archivo of archivos) {
-      const resultadoIndividual = await this.procesarArchivoFirmadoIndividual(archivo, ejecutor);
+    const procesados: ResultadoArchivoLote[] = [];
+    const errores: ResultadoArchivoLote[] = [...erroresDescompresion];
+
+    for (const item of pdfsParaProcesar) {
+      const resultadoIndividual = await this.procesarArchivoFirmadoIndividual(
+        item.archivo,
+        ejecutor,
+        item.origenZip,
+      );
       if (resultadoIndividual.exito) {
         procesados.push(resultadoIndividual);
       } else {
@@ -601,7 +857,7 @@ export class FirmasServiceService implements OnModuleInit {
     }
 
     return {
-      totalRecibidos: archivos.length,
+      totalRecibidos: procesados.length + errores.length,
       exitosos: procesados.length,
       fallidos: errores.length,
       procesados,
@@ -612,6 +868,7 @@ export class FirmasServiceService implements OnModuleInit {
   private async procesarArchivoFirmadoIndividual(
     archivo: Express.Multer.File,
     ejecutor: EjecutorFirma,
+    origenZip?: string,
   ): Promise<ResultadoArchivoLote> {
     const buffer = archivo.buffer;
     const nombreArchivo = archivo.originalname || 'archivo_sin_nombre.pdf';
@@ -684,7 +941,7 @@ export class FirmasServiceService implements OnModuleInit {
         resolucion.nombreDecanoSnapshot,
       );
 
-      // 5. Guardar archivo físico en ./storage/firmados/AAAA/SERIE/
+      // 5. Preparar ruta destino y escribir archivo temporal (se promueve tras confirmar la transacción ACID)
       const carpetaDestino = path.join(
         this.storageRoot,
         String(resolucion.anioNumeracion),
@@ -696,23 +953,43 @@ export class FirmasServiceService implements OnModuleInit {
 
       const nombreArchivoGuardado = `${resolucion.numeroCompleto}_FIRMADO.pdf`;
       const rutaAbsoluta = path.join(carpetaDestino, nombreArchivoGuardado);
+      const rutaTemporal = `${rutaAbsoluta}.${crypto.randomUUID()}.tmp`;
       const rutaRelativaBd = path
         .relative(process.cwd(), rutaAbsoluta)
         .replace(/\\/g, '/');
 
-      fs.writeFileSync(rutaAbsoluta, buffer);
+      fs.writeFileSync(rutaTemporal, buffer);
 
-      // 6. Transacción ACID: pasar a FIRMADO, actualizar tesista/expediente y auditar
-      const resultadoTx = await this.prisma.$transaction(async (tx) => {
-        const resActualizada = await tx.resolucion.update({
-          where: { id: resolucion!.id },
-          data: {
-            estadoDocumental: EstadoDocumentalRes.FIRMADO,
-            pdfFirmadoPath: rutaRelativaBd,
-            pdfFirmadoSha256: sha256Archivo,
-            fechaConfirmacionFirma: new Date(),
-          },
-        });
+      // 6. Transacción ACID con control optimista (evita doble firma concurrente)
+      let resultadoTx: {
+        resActualizada: any;
+        expedienteCerradoComoTitulado: boolean;
+      };
+      try {
+        resultadoTx = await this.prisma.$transaction(async (tx) => {
+          const actualizadoCount = await tx.resolucion.updateMany({
+            where: {
+              id: resolucion!.id,
+              estadoDocumental: EstadoDocumentalRes.EMITIDO,
+              situacionJuridica: SituacionJuridicaRes.VIGENTE,
+            },
+            data: {
+              estadoDocumental: EstadoDocumentalRes.FIRMADO,
+              pdfFirmadoPath: rutaRelativaBd,
+              pdfFirmadoSha256: sha256Archivo,
+              fechaConfirmacionFirma: new Date(),
+            },
+          });
+
+          if (actualizadoCount.count === 0) {
+            throw new BadRequestException(
+              `YA_FIRMADO: La resolución ${resolucion!.numeroCompleto} ya fue firmada o cambió de estado en una operación concurrente.`,
+            );
+          }
+
+          const resActualizada = await tx.resolucion.findUniqueOrThrow({
+            where: { id: resolucion!.id },
+          });
 
         if (resActualizada.tipo === TipoResolucion.APTO && resActualizada.tesistaId) {
           await tx.tesista.update({
@@ -801,10 +1078,18 @@ export class FirmasServiceService implements OnModuleInit {
         }
 
         return { resActualizada, expedienteCerradoComoTitulado };
-      });
+        });
+        fs.renameSync(rutaTemporal, rutaAbsoluta);
+      } catch (txErr) {
+        if (fs.existsSync(rutaTemporal)) {
+          fs.unlinkSync(rutaTemporal);
+        }
+        throw txErr;
+      }
 
       return {
         nombreArchivo,
+        ...(origenZip ? { origenZip } : {}),
         sha256Archivo,
         exito: true,
         resolucionId: resultadoTx.resActualizada.id,
@@ -848,6 +1133,7 @@ export class FirmasServiceService implements OnModuleInit {
 
       return {
         nombreArchivo,
+        ...(origenZip ? { origenZip } : {}),
         sha256Archivo,
         exito: false,
         codigoError,
@@ -882,6 +1168,16 @@ export class FirmasServiceService implements OnModuleInit {
     }
 
     const rutaAbsoluta = path.resolve(process.cwd(), resolucion.pdfFirmadoPath);
+    const raizNormalizada = this.storageRoot.endsWith(path.sep)
+      ? this.storageRoot
+      : `${this.storageRoot}${path.sep}`;
+
+    if (!rutaAbsoluta.startsWith(raizNormalizada)) {
+      throw new BadRequestException(
+        'RUTA_STORAGE_INVALIDA: La ruta del archivo firmado está fuera del directorio autorizado.',
+      );
+    }
+
     if (!fs.existsSync(rutaAbsoluta)) {
       throw new NotFoundException(
         `El archivo físico firmado no fue encontrado en la ruta ${resolucion.pdfFirmadoPath}.`,
@@ -889,6 +1185,22 @@ export class FirmasServiceService implements OnModuleInit {
     }
 
     const buffer = fs.readFileSync(rutaAbsoluta);
+    if (resolucion.pdfFirmadoSha256) {
+      const shaActual = crypto
+        .createHash('sha256')
+        .update(buffer)
+        .digest('hex')
+        .toUpperCase();
+      if (shaActual !== resolucion.pdfFirmadoSha256.toUpperCase()) {
+        this.logger.error(
+          `ALERTA DE INTEGRIDAD: El SHA-256 en disco de ${resolucion.numeroCompleto} no coincide con el registrado en BD.`,
+        );
+        throw new InternalServerErrorException(
+          `Error de integridad documental: el archivo firmado de ${resolucion.numeroCompleto} fue alterado en el almacenamiento.`,
+        );
+      }
+    }
+
     return {
       buffer,
       nombreArchivo: path.basename(rutaAbsoluta),

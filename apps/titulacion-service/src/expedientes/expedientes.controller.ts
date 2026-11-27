@@ -42,7 +42,11 @@ export class ExpedientesController {
 
   @Patch(':id/estado')
   @Roles(RolUsuario.ADMIN, RolUsuario.SECRETARIA_ACADEMICA)
-  cambiarEstado(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Body() dto: CambiarEstadoExpedienteDto): Promise<ExpedienteDetalleResponse> {
-    return this.expedientesService.cambiarEstado(id, dto);
+  cambiarEstado(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: CambiarEstadoExpedienteDto,
+    @CurrentUser() user: JwtPayload,
+  ): Promise<ExpedienteDetalleResponse> {
+    return this.expedientesService.cambiarEstado(id, dto, user);
   }
 }

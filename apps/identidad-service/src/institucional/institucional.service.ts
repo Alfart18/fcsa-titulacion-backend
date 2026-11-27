@@ -123,6 +123,17 @@ export class InstitucionalService {
           },
         });
 
+        // Sincronizar reglamentoMarco en esquema public
+        try {
+          await tx.$executeRaw`
+            UPDATE public.configuracion_institucional
+            SET "reglamentoMarco" = ${actualizada.reglamentoMarco}, "actualizadoEn" = NOW()
+            WHERE id = ${actualizada.id}
+          `;
+        } catch {
+          // Ignorar si el esquema public no existe en entorno aislado
+        }
+
         return actualizada;
       },
     );
@@ -186,6 +197,17 @@ export class InstitucionalService {
           },
         },
       });
+      // Sincronizar Decano Firmante en esquema public
+      try {
+        await tx.$executeRaw`UPDATE public.usuarios SET "esDecanoFirmante" = false WHERE "esDecanoFirmante" = true`;
+        await tx.$executeRaw`
+          UPDATE public.usuarios
+          SET "esDecanoFirmante" = true, "actualizadoEn" = NOW()
+          WHERE id = ${candidato.id}::uuid OR correo = ${candidato.correo}
+        `;
+      } catch {
+        // Ignorar si el esquema public no existe en entorno aislado
+      }
     });
 
     return this.obtenerConfiguracion();

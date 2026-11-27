@@ -377,6 +377,24 @@ export class ExpedientesService {
         });
       }
 
+      await tx.registroAuditoria.create({
+        data: {
+          usuarioId,
+          inicialesUsuario: usuarioActual.iniciales || 'OP',
+          accion: 'CREAR_EXPEDIENTE',
+          entidad: 'expedientes',
+          entidadId: expediente.id,
+          expedienteId: expediente.id,
+          detalle: {
+            ejecutorIdJwt: usuarioActual.sub,
+            codigoExpediente: expediente.codigoExpediente,
+            escuelaProfesionalId: dto.escuelaProfesionalId,
+            cantidadTesistas: dto.cantidadTesistas,
+            pasoInicial: pasoActual,
+          },
+        },
+      });
+
       return tx.expediente.findUniqueOrThrow({
         where: { id: expediente.id },
         include: {
@@ -442,10 +460,40 @@ export class ExpedientesService {
     return this.prisma.resolucion.findMany({ where: { expedienteId: id }, orderBy: { creadoEn: 'asc' } });
   }
 
-  async cambiarEstado(id: string, dto: CambiarEstadoExpedienteDto): Promise<ExpedienteDetalleResponse> {
-    const actual = await this.prisma.expediente.findUnique({ where: { id }, select: { id: true } });
+  async cambiarEstado(
+    id: string,
+    dto: CambiarEstadoExpedienteDto,
+    usuarioActual?: JwtPayload,
+  ): Promise<ExpedienteDetalleResponse> {
+    const actual = await this.prisma.expediente.findUnique({
+      where: { id },
+      select: { id: true, codigoExpediente: true, estado: true },
+    });
     if (!actual) throw new NotFoundException(`No se encontró el expediente con ID "${id}".`);
-    await this.prisma.expediente.update({ where: { id }, data: { estado: dto.estado } });
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.expediente.update({ where: { id }, data: { estado: dto.estado } });
+      if (usuarioActual) {
+        const usuarioId = await this.prisma.resolverUsuarioId(usuarioActual, tx);
+        await tx.registroAuditoria.create({
+          data: {
+            usuarioId,
+            inicialesUsuario: usuarioActual.iniciales || 'OP',
+            accion: 'CAMBIAR_ESTADO_EXPEDIENTE',
+            entidad: 'expedientes',
+            entidadId: id,
+            expedienteId: id,
+            detalle: {
+              ejecutorIdJwt: usuarioActual.sub,
+              codigoExpediente: actual.codigoExpediente,
+              estadoAnterior: actual.estado,
+              estadoNuevo: dto.estado,
+            },
+          },
+        });
+      }
+    });
+
     return this.obtenerPorId(id);
   }
 }

@@ -4,11 +4,11 @@ services:
     container_name: fcsa_titulacion_db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: fcsa_user
-      POSTGRES_PASSWORD: fcsa_password_2026
-      POSTGRES_DB: fcsa_titulacion
+      POSTGRES_USER: ${POSTGRES_USER:-fcsa_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fcsa_password_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-fcsa_titulacion}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata_fcsa:/var/lib/postgresql/data
     healthcheck:

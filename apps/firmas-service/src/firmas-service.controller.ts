@@ -68,7 +68,7 @@ export class FirmasServiceController {
     res.end(zipBuffer);
   }
 
-  // 3. Subir 1 o N archivos PDF firmados (Drag-and-Drop múltiple con aislamiento de fallos)
+  // 3. Subir 1 o N archivos PDF firmados o paquetes .ZIP (Drag-and-Drop múltiple con descompresión segura y aislamiento de fallos)
   @Roles(
     RolUsuario.ADMIN,
     RolUsuario.DECANO,
@@ -77,10 +77,11 @@ export class FirmasServiceController {
   )
   @Post('validar-lote')
   @UseInterceptors(
-    FilesInterceptor('archivos', 50, {
+    FilesInterceptor('archivos', 25, {
       storage: memoryStorage(),
       limits: {
-        fileSize: 15 * 1024 * 1024, // 15 MB máximo por PDF
+        fileSize: 25 * 1024 * 1024, // Hasta 25 MB para paquetes .ZIP (cada PDF individual se valida a máx. 5 MB)
+        files: 25,
       },
     }),
   )

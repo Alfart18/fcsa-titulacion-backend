@@ -26,18 +26,49 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales incorrectas.');
     }
 
-    if (usuario.estado === EstadoUsuario.DESACTIVADO) {
-      throw new ForbiddenException(
-        'Su cuenta se encuentra DESACTIVADA. Comuníquese con el Decanato de la FCSa.',
-      );
-    }
-
+    // Verificar contraseña ANTES de informar si la cuenta está desactivada (evita enumeración de cuentas)
     const passwordValido = await bcrypt.compare(
       dto.password,
       usuario.passwordHash,
     );
     if (!passwordValido) {
+      await this.prisma.registroAuditoria
+        .create({
+          data: {
+            usuarioId: usuario.id,
+            inicialesUsuario: usuario.iniciales,
+            accion: 'LOGIN_FALLIDO',
+            entidad: 'usuarios',
+            entidadId: usuario.id,
+            detalle: {
+              correo: usuario.correo,
+              motivo: 'CONTRASEÑA_INCORRECTA',
+            },
+          },
+        })
+        .catch(() => undefined);
       throw new UnauthorizedException('Credenciales incorrectas.');
+    }
+
+    if (usuario.estado === EstadoUsuario.DESACTIVADO) {
+      await this.prisma.registroAuditoria
+        .create({
+          data: {
+            usuarioId: usuario.id,
+            inicialesUsuario: usuario.iniciales,
+            accion: 'LOGIN_BLOQUEADO_DESACTIVADO',
+            entidad: 'usuarios',
+            entidadId: usuario.id,
+            detalle: {
+              correo: usuario.correo,
+              motivo: 'CUENTA_DESACTIVADA',
+            },
+          },
+        })
+        .catch(() => undefined);
+      throw new ForbiddenException(
+        'Su cuenta se encuentra DESACTIVADA. Comuníquese con el Decanato de la FCSa.',
+      );
     }
 
     const payload = {
@@ -46,6 +77,22 @@ export class AuthService {
       iniciales: usuario.iniciales,
       nombresCompletos: usuario.nombresCompletos,
     };
+
+    await this.prisma.registroAuditoria
+      .create({
+        data: {
+          usuarioId: usuario.id,
+          inicialesUsuario: usuario.iniciales,
+          accion: 'LOGIN_EXITOSO',
+          entidad: 'usuarios',
+          entidadId: usuario.id,
+          detalle: {
+            correo: usuario.correo,
+            rol: usuario.rol,
+          },
+        },
+      })
+      .catch(() => undefined);
 
     return {
       accessToken: await this.jwtService.signAsync(payload),

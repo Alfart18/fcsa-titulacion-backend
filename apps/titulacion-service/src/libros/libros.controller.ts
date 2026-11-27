@@ -17,6 +17,7 @@ export class LibrosController {
   constructor(private readonly librosService: LibrosService) {}
 
   @Get('contadores')
+  @Roles(RolUsuario.ADMIN, RolUsuario.DECANO, RolUsuario.SECRETARIA_ACADEMICA, RolUsuario.ADMINISTRATIVO)
   async obtenerContadores(
     @Query('anio', new ParseIntPipe({ optional: true })) anio?: number,
   ) {
@@ -24,6 +25,7 @@ export class LibrosController {
   }
 
   @Get('numeracion')
+  @Roles(RolUsuario.ADMIN, RolUsuario.DECANO, RolUsuario.SECRETARIA_ACADEMICA, RolUsuario.ADMINISTRATIVO)
   async listarNumeracion(@Query() filtros: FiltroLibroNumeracionDto) {
     return this.librosService.listarLibroNumeracion(filtros);
   }
@@ -41,11 +43,13 @@ export class LibrosController {
   }
 
   @Get('inscripcion')
+  @Roles(RolUsuario.ADMIN, RolUsuario.DECANO, RolUsuario.SECRETARIA_ACADEMICA, RolUsuario.ADMINISTRATIVO)
   async listarInscripcion(@Query() filtros: FiltroLibroInscripcionDto) {
     return this.librosService.listarLibroInscripcion(filtros);
   }
 
   @Get('titulos')
+  @Roles(RolUsuario.ADMIN, RolUsuario.DECANO, RolUsuario.SECRETARIA_ACADEMICA, RolUsuario.ADMINISTRATIVO)
   async listarTitulos(@Query() filtros: FiltroLibroTituloDto) {
     return this.librosService.listarLibroTitulo(filtros);
   }
